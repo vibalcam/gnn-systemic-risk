@@ -3,3 +3,4 @@ dgl
 tensorboard
 pandas
 numpy
+networkx
