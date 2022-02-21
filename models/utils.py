@@ -112,24 +112,22 @@ def accuracy(predicted: torch.Tensor, label: torch.Tensor, mean: bool = True):
 # todo añadir encoding
 
 def save_dict(d: Dict, path: str) -> None:
-    """Saves a dictionary to a file in plain text
-
-    :param d: Dict: dictionary to save
-    :param path: str: path of the file where the dictionary will be saved
     """
-
-    with open(path, 'w') as file:
+    Saves a dictionary to a file in plain text
+    :param d: dictionary to save
+    :param path: path of the file where the dictionary will be saved
+    """
+    with open(path, 'w', encoding="utf-8") as file:
         file.write(str(d))
 
 
 def load_dict(path: str) -> Dict:
-    """Loads a dictionary from a file in plain text
-
-    :param path: str: path where the dictionary was saved
-    :returns: the loaded dictionary
     """
-
-    with open(path, 'r') as file:
+    Loads a dictionary from a file in plain text
+    :param path: path where the dictionary was saved
+    :return: the loaded dictionary
+    """
+    with open(path, 'r', encoding="utf-8") as file:
         from ast import literal_eval
         loaded = dict(literal_eval(file.read()))
     return loaded
@@ -144,13 +142,16 @@ def set_seed(seed: int) -> None:
 
 
 def load_list(path: str) -> List:
-    """Loads a list from a file in plain text
-
-    :param path: str: path where the list was saved
-    :returns: the loaded list
     """
-
-    with open(path, 'r') as file:
+    Loads a list from a file in plain text
+    :param path: path where the list was saved
+    :return: the loaded list
+    """
+    with open(path, 'r', encoding="utf-8") as file:
         from ast import literal_eval
         loaded = list(literal_eval(file.read()))
     return loaded
+
+
+if __name__ == '__main__':
+    pass
