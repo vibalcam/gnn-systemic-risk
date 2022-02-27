@@ -1,30 +1,92 @@
-from typing import List, Dict
+from typing import List, Dict, Tuple
 
 import torch
 import dgl
+import dgl.nn.pytorch as dglnn
+import torch.nn.functional as F
 
-from models.utils import load_dict
+from models.utils import load_dict, save_dict
+import pathlib
 
+# todo add norm options
 
-
-
-class ContagionNN(torch.nn.Module):
-    def __init__(self, in_feats, h_feats, num_classes):
+class GCN(torch.nn.Module):
+    def __init__(
+        self, 
+        in_features:int, 
+        h_features:List[int], 
+        out_features:int,
+        activation:torch.nn.Module,
+        dropout:float=0.0
+    ):
+        """
+        
+        """
         super(GCN, self).__init__()
-
-
-        self.conv1 = GraphConv(in_feats, h_feats)
-        self.conv2 = GraphConv(h_feats, num_classes)
+        self.dropout = dropout
+        self.layers = torch.nn.ModuleList()
+        # input layer
+        h = h_features[0]
+        self.layers.append(dglnn.GraphConv(in_features, h, activation=activation))
+        # hidden layers
+        for k in h_features[1:]:
+            self.layers.append(dglnn.GraphConv(h, k, activation=activation))
+            h = k
+        # output layer
+        self.layers.append(dglnn.GraphConv(h, out_features, activation=None))
     
-    def forward(self, g, in_feat):
-        h = self.conv1(g, in_feat)
-        h = F.relu(h)
-        h = self.conv2(g, h)
+    def forward(self, g:dgl.data.DGLDataset, feats):
+        # todo add self loops to avoid zero-in degree, move to dataset 
+        # (https://docs.dgl.ai/en/0.6.x/api/python/nn.pytorch.html#graphconv)
+        g = g.remove_self_loop().add_self_loop()
+
+        h = self.layers[0](g, feats)
+        for l in self.layers[1:]:
+            h = F.dropout(h, p=self.dropout, training=self.training)
+            h = l(g,h)
+        return h
+    
+# # Create the model with given dimensions
+# model = GCN(g.ndata['feat'].shape[1], 16, dataset.num_classes)
+
+
+class GraphSAGE(torch.nn.Module):
+    def __init__(
+        self,
+        in_features:int,
+        h_features:List[int], 
+        out_features:int,
+        activation:torch.nn.Module,
+        aggregator_type,
+        feat_drop:float=0.0,
+    ):
+        """
+        
+        """
+        super(GraphSAGE, self).__init__()
+        self.layers = torch.nn.ModuleList()
+        # self.norm_layers = torch.nn.ModuleList()
+
+        # input layer
+        # normalization in SAGEConv module is applied after
+        h = h_features[0]
+        self.layers.append(dglnn.SAGEConv(in_features, h, aggregator_type,norm=None, feat_drop=feat_drop, activation=activation))
+        # hidden layers
+        for k in h_features[1:]:
+            self.layers.append(dglnn.SAGEConv(h, k, aggregator_type, feat_drop=feat_drop, activation=activation))
+            h = k
+        # output layer
+        self.layers.append(dglnn.SAGEConv(h, out_features, aggregator_type, feat_drop=feat_drop, activation=None))
+
+    def forward(self, g:dgl.data.DGLDataset, feats):
+        h = feats
+        for layer in self.layers:
+            h = layer(self.g, h)
         return h
 
+# GAT -> 
 
-
-
+# try batch normalization
 
 
 def save_model(model: torch.nn.Module, folder: str, model_name: str, param_dicts: Dict = None) -> None:
@@ -45,7 +107,7 @@ def save_model(model: torch.nn.Module, folder: str, model_name: str, param_dicts
         save_dict(param_dicts, f"{folder_path}/{model_name}.dict")
 
 
-def load_model(folder_path: pathlib.Path) -> Tuple[torch.nn.Module, Dict]:
+def load_model(model_class, folder_path: pathlib.Path) -> Tuple[torch.nn.Module, Dict]:
     """
     Loads a model that has been previously saved using its name (model th and dict must have that same name)
     Only works for StateActionModel
@@ -54,7 +116,7 @@ def load_model(folder_path: pathlib.Path) -> Tuple[torch.nn.Module, Dict]:
     """
     path = f"{folder_path.absolute()}/{folder_path.name}"
     dict_model = load_dict(f"{path}.dict")
-    return load_model_data(StateActionModel(**dict_model), f"{path}.th"), dict_model
+    return load_model_data(model_class(**dict_model), f"{path}.th"), dict_model
 
 
 def load_model_data(model: torch.nn.Module, model_path: str) -> torch.nn.Module:
