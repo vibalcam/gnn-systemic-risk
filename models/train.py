@@ -1,3 +1,4 @@
+import itertools
 from os import path
 from typing import List, Dict
 
@@ -5,8 +6,8 @@ import numpy as np
 import torch
 import torch.utils.tensorboard as tb
 
-from .models import GCN, StateActionModel, load_model, save_model, load_model_from_name
-from .utils import ConfusionMatrix, ContagionDataset, load_data, accuracy, save_dict, load_dict
+from .models import GCN, GAT, GraphSAGE, load_model, save_model
+from .utils import ConfusionMatrix, ContagionDataset, save_dict, load_dict
 
 
 def train(
@@ -22,7 +23,8 @@ def train(
         debug_mode: bool = False,
         steps_validate: int = 1,
         use_cpu: bool = False,
-        label_smoothing:float = 0.0,
+        label_smoothing: float = 0.0,
+        use_edge_weight: bool = True,
 ):
     """
     Method that trains a given model
@@ -40,6 +42,7 @@ def train(
     :param debug_mode: whether to use debug mode (cpu and 0 workers)
     :param steps_validate: number of epoch after which to validate and save model (if conditions met)
     :param label_smoothing: label smoothing applied to CrossEntropyLoss (https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html)
+    :param use_edge_weight: If true, it uses edge weights for training when possible
     """
 
     # cpu or gpu used for training if available (gpu much faster)
@@ -48,13 +51,13 @@ def train(
 
     # Tensorboard
     global_step = 0
-    dict_param = {k:v for k,v in locals() if k in [
-        'lr', 
+    dict_param = {k: v for k, v in locals().items() if k in [
+        'lr',
         'optimizer_name',
         'batch_size',
         'scheduler_mode',
         'label_smoothing',
-        'drop_edges',
+        'use_edge_weight',
     ]}
     name_model = '/'.join([
         str(dict_model)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
@@ -110,7 +113,7 @@ def train(
     for epoch in range(n_epochs):
         print(f"{epoch} of {n_epochs}")
         train_loss = []
-        train_cm = ConfusionMatrix(model.out_features)
+        train_cm = ConfusionMatrix(dataset.num_classes)
 
         # Start training: train mode
         model.train()
@@ -120,11 +123,11 @@ def train(
             # Get data
             features = g.ndata['feat']
             labels = g.ndata['label']
-            edge_weights = g.edata['weight']
+            edge_weight = g.edata['weight']
             train_mask = g.ndata['train_mask']
 
             # Compute loss on training and update parameters
-            logits = model(g, features, edge_weights=edge_weights)
+            logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
             loss_train = loss(logits[train_mask], labels[train_mask])
 
             # Do back propagation
@@ -140,8 +143,8 @@ def train(
         # Can be done in combination with training if drop_edges is 0
         # No performance issue for small graphs so we can separate it
         val_loss = []
-        val_cm = ConfusionMatrix(model.out_features)
-        test_cm = ConfusionMatrix(model.out_features)
+        val_cm = ConfusionMatrix(dataset.num_classes)
+        test_cm = ConfusionMatrix(dataset.num_classes)
         model.eval()
         with torch.no_grad():
             for g in dataset:
@@ -150,11 +153,11 @@ def train(
                 # Get data
                 features = g.ndata['feat']
                 labels = g.ndata['label']
-                edge_weights = g.edata['weight']
+                edge_weight = g.edata['weight']
                 val_mask = g.ndata['val_mask']
                 test_mask = g.ndata['test_mask']
 
-                logits = model(g, features, edge_weights=edge_weights)
+                logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
 
                 # Add loss and accuracy
                 val_loss.append(loss(logits[val_mask], labels[val_mask]).cpu().detach().numpy())
@@ -164,6 +167,7 @@ def train(
         # calculate mean metrics
         train_loss = np.mean(train_loss)
         train_acc = train_cm.global_accuracy
+        val_loss = np.mean(val_loss)
         val_acc = val_cm.global_accuracy
 
         # Step the scheduler to change the learning rate
@@ -198,7 +202,7 @@ def train(
             save_model(model, save_path, name_path, param_dicts=dict_model)
 
 
-def log_confussion_matrix(logger, confussion_matrix:ConfusionMatrix, global_step:int):
+def log_confussion_matrix(logger, confussion_matrix: ConfusionMatrix, global_step: int):
     """
     Logs the data in the confussion matrix to a logger
     :param logger: tensorboard logger to use for logging
@@ -214,7 +218,7 @@ def log_confussion_matrix(logger, confussion_matrix:ConfusionMatrix, global_step
 # def test(
 #         data_path: str = './yarnScripts',
 #         save_path: str = './models/saved',
-#         n_runs: int = 3,
+#         n_runs: int = 1,
 #         batch_size: int = 8,
 #         num_workers: int = 0,
 #         debug_mode: bool = False,
@@ -284,6 +288,48 @@ def log_confussion_matrix(logger, confussion_matrix:ConfusionMatrix, global_step
 #             save_dict(dict_model, f"{folder_path}/{folder_path.name}.dict")
 
 
+def main_train():
+    dataset = ContagionDataset(
+        raw_dir='./data',
+        drop_edges=0,
+        sets_lengths=(0.8, 0.1, 0.1),
+    )
+
+    gcn_model = dict(
+        in_features=[dataset.node_features],
+        h_features=[[5, 5], [5, 10], [10, 5]],
+        out_features=[dataset.num_classes],
+        activation=[torch.nn.ReLU()],
+        norm_edges=['both'],
+        norm_nodes=[None, 'bn', 'gn'],
+        dropout=[0.2, 0.5, 0.0],
+        # other
+        lr=[1e-2, 1, 1e-3],
+        label_smoothing=[0.0, 0.2, 0.4],
+    )
+    list_gcn_model = [dict(zip(gcn_model.keys(), k)) for k in itertools.product(*gcn_model.values())]
+
+    for d in list_gcn_model:
+        lr = d.pop('lr')
+        ls = d.pop('label_smoothing')
+        train(
+            model=GCN(**d),
+            dict_model=d,
+            dataset=dataset,
+            log_dir='./models/logs',
+            save_path='./models/saved',
+            lr=lr,
+            optimizer_name="adamw",
+            n_epochs=100,
+            scheduler_mode='max_val_acc',
+            debug_mode=False,
+            steps_validate=1,
+            use_cpu=False,
+            label_smoothing=ls,
+            use_edge_weight=True,
+        )
+
+
 if __name__ == '__main__':
     from argparse import ArgumentParser
     args_parser = ArgumentParser()
@@ -296,32 +342,5 @@ if __name__ == '__main__':
 
     if args.test is not None:
         pass
-        # test(n_runs=args.test)
     else:
-        # Dataset
-        dataset = ContagionDataset(
-            raw_dir=data_path,
-            drop_edges=drop_edges,
-            sets_lengths=(0.8,0.1,0.1),
-        )
-        # Model
-        dict_model = dict(
-            
-        )
-        model = GCN(**dict_model)
-
-        # Training hyperparameters
-        train(
-            model=model,
-            dict_model=dict_model,
-            dataset=dataset
-            log_dir='./models/logs',
-            save_path='./models/saved',
-            lr=1e-3,
-            optimizer_name="adamw",
-            n_epochs=100,
-            scheduler_mode='max_val_acc',
-            debug_mode=False,
-            steps_validate=1,
-            use_cpu=False,
-        )
+        main_train()

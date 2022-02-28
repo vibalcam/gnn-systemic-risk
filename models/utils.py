@@ -23,27 +23,36 @@ NODE_ATTR = [
 class ContagionDataset(dgl.data.DGLDataset):
     """Class that represents a dataset to train the classifier"""
 
-    def __init__(self,raw_dir:str='./data', drop_edges:float = 0,
-                sets_lengths:Tuple[float,float,float]=(0.8, 0.1, 0.1), seed:int=123):
+    def __init__(
+            self,
+            raw_dir:str='./data',
+            drop_edges:float = 0,
+            add_self_loop:bool = True,
+            sets_lengths:Tuple[float,float,float]=(0.8, 0.1, 0.1),
+            seed:int=123
+    ):
         """
         Initializer for the dataset
         :param raw_dir: directory where the input data is stored
         :param drop_edges: percentage of edges to remove. Value in [0,1]
+        :param add_self_loop: If true, it adds non duplicated self loops
         :param sets_lengths: tuple with percentage of train, validation and test samples
         :param seed: seed to randomly generate train, valid and test sets
         """
         if not (0 <= drop_edges <= 1):
             raise Exception("drop_edges must be a value in [0,1]")
         
-        super().__init__(raw_dir=raw_dir, name='contagion', verbose=True)
         self.sets_lengths = sets_lengths
         self.drop_edges = drop_edges
+        self.add_self_loop = add_self_loop
         self.random_generator = torch.manual_seed(seed)
+        # todo reset random seed
         
-
         # todo change this
-        self.num_classes = len(QUANTILES)
+        self.num_classes = len(QUANTILES) + 1
         self.node_features = len(NODE_ATTR)
+
+        super().__init__(raw_dir=raw_dir, name='contagion', verbose=True)
 
     def process(self):
         # todo change location of files, for loop folder raw_dir
@@ -51,8 +60,8 @@ class ContagionDataset(dgl.data.DGLDataset):
         self.graphs = []
         
         # LOAD DATA
-        nodes = pd.read_csv('nodes.csv', index_col=0).set_index('bank')
-        network = pd.read_csv('network.csv', index_col=0)
+        nodes = pd.read_csv(f'{self.raw_dir}/nodes.csv', index_col=0).set_index('bank')
+        network = pd.read_csv(f'{self.raw_dir}/network.csv', index_col=0)
         # create networkx graph from adjacency matrix
         graph = nx.convert_matrix.from_pandas_adjacency(network, create_using=nx.DiGraph)
 
@@ -101,7 +110,6 @@ class ContagionDataset(dgl.data.DGLDataset):
         # add to list
         self.graphs.append(graph_dgl)
 
-
     def __len__(self):
         return len(self.graphs)
 
@@ -112,6 +120,10 @@ class ContagionDataset(dgl.data.DGLDataset):
             k = copy.deepcopy(k)
             n_remove = int(k.num_edges() * self.drop_edges)
             k.remove_edges(torch.randint(k.num_edges(), size=(n_remove,), generator=self.random_generator))
+
+        # add self loops
+        if self.add_self_loop:
+            k = k.remove_self_loop().add_self_loop()
 
         return k
 
