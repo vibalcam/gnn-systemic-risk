@@ -74,7 +74,7 @@ rownames(md_mat) <- colnames(md_mat) <- sim_data$bank
 #   theme_blank()
 
 
-
+# CONTAGION
 
 
 # The DebtRank methodology proposed by Bardoscia et al (2015) considers a linear shock propagation — briefly, 
@@ -106,18 +106,13 @@ summary(contdr)
 # plot(cont, size = 2.2)
 
 
+# SAVE DATA
 
 contdr_summary <- summary(contdr)
 sim_data$DebtRank <- contdr_summary$summary_table$additional_stress
 
-
-
 # combine all data
 merged = merge(sim_data,contdr_summary$summary_table, by = "bank")
-
-
-
-
 
 # write csv
 write.csv(md_mat, "network.csv", row.names = TRUE)
