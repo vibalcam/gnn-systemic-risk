@@ -1,15 +1,19 @@
+import pathlib
 from typing import List, Dict, Tuple, Optional
 
-import torch
 import dgl
 import dgl.nn.pytorch as dglnn
+import torch
 import torch.nn.functional as F
 
-from models.utils import load_dict, save_dict
 from models.norm import GraphNorm
-import pathlib
+from models.utils import load_dict, save_dict
 
-# todo add norm options
+
+# todo finish
+class FNN(torch.nn.Module):
+    pass
+
 
 class GCN(torch.nn.Module):
     def __init__(
@@ -160,9 +164,9 @@ class GAT(torch.nn.Module):
         Graph Attention Network
 
         :param in_features: input feature size
-        :param h_features: list of hidden feature size
+        :param h_features: list of hidden feature size (a maximum of `len(num_heads)` elements will be used)
         :param out_features: out feature size
-        :param num_heads: list of number of heads in Multi-Head Attention (should be same size as `h_features`)
+        :param num_heads: list of number of heads in Multi-Head Attention (a maximum of `len(h_features)` elements will be used)
         :param norm_nodes: If not None, applies normalization to the node features
         :param activation: If not None, applies an activation function to the updated node features
         :param negative_slope: LeakyReLU angle of negative slope
@@ -191,21 +195,22 @@ class GAT(torch.nn.Module):
             ))
 
         # hidden layers
-        for k,heads in zip(h_features[1:], num_heads[1:]):
+        for i in range(1, min(len(h_features), len(num_heads))):
+        # for h_features[i],num_heads[i] in zip(h_features[1:], num_heads[1:]):
             self.norm_layers.append(GraphNorm(norm_nodes, hidden_dim=h * last_head))
             # due to multi-head, the in_dim = num_hidden * num_heads
             self.layers.append(dglnn.GATConv(
                     in_feats=h * last_head, 
-                    out_feats=k, 
-                    num_heads=heads,
+                    out_feats=h_features[i], 
+                    num_heads=num_heads[i],
                     feat_drop=feat_drop, 
                     attn_drop=attn_drop, 
                     negative_slope=negative_slope, 
                     residual=residual, 
                     activation=activation,
                 ))
-            h = k
-            last_head = heads
+            h = h_features[i]
+            last_head = num_heads[i]
 
         # output projection
         self.norm_layers.append(GraphNorm(norm_nodes, hidden_dim=h * last_head))
@@ -233,7 +238,21 @@ class GAT(torch.nn.Module):
         return h
 
 
-def save_model(model: torch.nn.Module, folder: str, model_name: str, param_dicts: Dict = None) -> None:
+MODEL_CLASS = {
+    'gcn': GCN,
+    'sage': GraphSAGE,
+    'gat': GAT,
+}
+
+MODEL_CLASS_KEY = 'model_class'
+
+ACTIVATION_KEY = 'activation'
+
+FOLDER_PATH_KEY = 'path_name'
+
+
+def save_model(model: torch.nn.Module, folder: str, model_name: str, param_dicts: Dict = None,
+               save_model:bool=True) -> None:
     """
     Saves the model so it can be loaded after
 
@@ -241,29 +260,56 @@ def save_model(model: torch.nn.Module, folder: str, model_name: str, param_dicts
     :param folder: path of the folder where to save the model
     :param param_dicts: dictionary of the model parameters that can later be used to load it
     :param model: model to be saved
+    :param save_model: If true the model and dictionary will be saved, otherwise only the dictionary will be saved
     """
     # create folder if it does not exist
     folder_path = f"{folder}/{model_name}"
     pathlib.Path(folder_path).mkdir(parents=True, exist_ok=True)
+
     # save model
-    torch.save(model.state_dict(), f"{folder_path}/{model_name}.th")
+    if save_model:
+        torch.save(model.state_dict(), f"{folder_path}/{model_name}.th")
+
     # save dict
-    if param_dicts is not None:
-        save_dict(param_dicts, f"{folder_path}/{model_name}.dict")
+    if param_dicts is None:
+        param_dicts = {}
+    else:
+        param_dicts = param_dicts.copy()
+        param_dicts[ACTIVATION_KEY] = str(type(param_dicts[ACTIVATION_KEY]).__name__)
+    # save model type
+    model_class = ''
+    for k,v in MODEL_CLASS.items():
+        if isinstance(model, v):
+            model_class = k
+            break
+    param_dicts[MODEL_CLASS_KEY] = model_class
+    save_dict(param_dicts, f"{folder_path}/{model_name}.dict")
 
 
-def load_model(model_class, folder_path: pathlib.Path) -> Tuple[torch.nn.Module, Dict]:
+def load_model(folder_path: pathlib.Path, model_class:Optional[str] = None) -> Tuple[torch.nn.Module, Dict]:
     """
     Loads a model that has been previously saved using its name (model th and dict must have that same name)
-    Only works for StateActionModel
 
     :param folder_path: folder path of the model to be loaded
+    :param model_class: one of the model classes in `MODEL_CLASS` dict. If none, it is obtained from the dictionary
     :return: the loaded model and the dictionary of parameters
     """
     # todo so it does not need to have the same name
     path = f"{folder_path.absolute()}/{folder_path.name}"
     dict_model = load_dict(f"{path}.dict")
-    return load_model_data(model_class(**dict_model), f"{path}.th"), dict_model
+
+    # get model class
+    if model_class is None:
+        model_class = dict_model.get(MODEL_CLASS_KEY)
+
+    # get activation object
+    if (act_key := dict_model.get(ACTIVATION_KEY, None)) is not None:
+        dict_model[ACTIVATION_KEY] = None if act_key=='NoneType' else eval(f"torch.nn.{act_key}()")
+
+    # set folder path
+    dict_model[FOLDER_PATH_KEY] = folder_path.name
+
+    return load_model_data(MODEL_CLASS[model_class](**dict_model), f"{path}.th"), dict_model
 
 
 def load_model_data(model: torch.nn.Module, model_path: str) -> torch.nn.Module:

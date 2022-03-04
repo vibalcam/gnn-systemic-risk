@@ -11,13 +11,14 @@ from glob import glob
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-TARGET_COLUMN = 'additional_stress'
 QUANTILES = [0.75, 0.5, 0.25]
 NODE_ATTR = [
     'assets',
     'liabilities',
-    # 'buffer',
+    'buffer',
 ]
+NODES_FILENAME = 'nodes.csv'
+NETWORK_FILENAME = 'network.csv'
 
 
 class ContagionDataset(dgl.data.DGLDataset):
@@ -29,7 +30,8 @@ class ContagionDataset(dgl.data.DGLDataset):
             drop_edges:float = 0,
             add_self_loop:bool = True,
             sets_lengths:Tuple[float,float,float]=(0.8, 0.1, 0.1),
-            seed:int=123
+            seed:int=123,
+            target = 'additional_stress',
     ):
         """
         Initializer for the dataset
@@ -38,10 +40,12 @@ class ContagionDataset(dgl.data.DGLDataset):
         :param add_self_loop: If true, it adds non duplicated self loops
         :param sets_lengths: tuple with percentage of train, validation and test samples
         :param seed: seed to randomly generate train, valid and test sets
+        :param target: column to use as target for quantile calculation
         """
         if not (0 <= drop_edges <= 1):
             raise Exception("drop_edges must be a value in [0,1]")
         
+        self.target_col = target
         self.sets_lengths = sets_lengths
         self.drop_edges = drop_edges
         self.add_self_loop = add_self_loop
@@ -50,40 +54,44 @@ class ContagionDataset(dgl.data.DGLDataset):
         
         # todo change this
         self.num_classes = len(QUANTILES) + 1
-        self.node_features = len(NODE_ATTR)
+        self.num_node_features = len(NODE_ATTR)
 
-        super().__init__(raw_dir=raw_dir, name='contagion', verbose=True)
+        super().__init__(raw_dir=raw_dir, name='contagion', verbose=False)
 
     def process(self):
         # todo change location of files, for loop folder raw_dir
         # pathlib.Path(self.raw_dir)
         self.graphs = []
+        self.targets = []
+        self.node_features = []
         
         # LOAD DATA
-        nodes = pd.read_csv(f'{self.raw_dir}/nodes.csv', index_col=0).set_index('bank')
-        network = pd.read_csv(f'{self.raw_dir}/network.csv', index_col=0)
+        nodes = pd.read_csv(f'{self.raw_dir}/{NODES_FILENAME}', index_col=0).set_index('bank')
+        network = pd.read_csv(f'{self.raw_dir}/{NETWORK_FILENAME}', index_col=0)
         # create networkx graph from adjacency matrix
         graph = nx.convert_matrix.from_pandas_adjacency(network, create_using=nx.DiGraph)
 
         # GET TARGET
-        quant = nodes[TARGET_COLUMN].quantile(QUANTILES)
+        quant = nodes[self.target_col].quantile(QUANTILES)
         is_quant = pd.DataFrame()
         free = np.ones(nodes.shape[0]).astype(bool)
         # get those higher than percentile and make them unavailable
         for k,v in quant.iteritems():
-            is_quant[k] = np.logical_and(nodes[TARGET_COLUMN] >= v, free)
+            is_quant[k] = np.logical_and(nodes[self.target_col] >= v, free)
             free = np.logical_and(free, np.logical_not(is_quant[k]))
         # last quantile are those still available
         is_quant[0.0] = free
         # from one_hot to labels
         is_quant_np = is_quant.to_numpy().astype(float)
         target_np = is_quant_np.argmax(1)
+        self.targets.append(target_np)
         # to dataframe for to_dict in networkx
         is_quant = pd.DataFrame(data=target_np, index=is_quant.index, columns=['label'])
 
         # ADD NODE DATA TO GRAPH
         # add features
         nodes_features = nodes[NODE_ATTR]
+        self.node_features.append(nodes_features)
         # add features to node in form: {node:{"feat":values}}
         nx.set_node_attributes(graph, {k:{"feat":torch.as_tensor(v, dtype=torch.float)} for k,v in nodes_features.T.to_dict('list').items()})
         # add target
@@ -99,13 +107,11 @@ class ContagionDataset(dgl.data.DGLDataset):
         train_mask[:n_train] = True
         val_mask[n_train:n_train+n_val] = True
         test_mask[n_train+n_val:] = True
-        # shuffle
+        # shuffle and set mask in nodes
         idx = torch.randperm(n_nodes, generator=self.random_generator)
-        train_mask, val_mask[idx], test_mask[idx] = train_mask[idx], val_mask[idx], test_mask[idx]
-        # set mask in nodes
-        graph_dgl.ndata['train_mask'] = train_mask
-        graph_dgl.ndata['val_mask'] = val_mask
-        graph_dgl.ndata['test_mask'] = test_mask
+        graph_dgl.ndata['train_mask'] = train_mask[idx]
+        graph_dgl.ndata['val_mask'] = val_mask[idx]
+        graph_dgl.ndata['test_mask'] = test_mask[idx]
 
         # add to list
         self.graphs.append(graph_dgl)
@@ -205,6 +211,9 @@ class ConfusionMatrix:
         plt.xlabel('Predicted label')
         
         return plt
+
+    def __repr__(self):
+        return self.visualize()
 
 
 def save_dict(d: Dict, path: str) -> None:

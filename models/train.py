@@ -1,10 +1,11 @@
 import itertools
 from os import path
-from typing import List, Dict
+from typing import List, Dict, Tuple, Optional
 
 import numpy as np
 import torch
 import torch.utils.tensorboard as tb
+from tqdm.auto import trange, tqdm
 
 from .models import GCN, GAT, GraphSAGE, load_model, save_model
 from .utils import ConfusionMatrix, ContagionDataset, save_dict, load_dict
@@ -13,7 +14,8 @@ from .utils import ConfusionMatrix, ContagionDataset, save_dict, load_dict
 def train(
         model: torch.nn.Module,
         dict_model: Dict,
-        dataset: ContagionDataset,
+        dataset_train: ContagionDataset,
+        dataset_val: Optional[ContagionDataset] = None,
         log_dir: str = './models/logs',
         save_path: str = './models/saved',
         lr: float = 1e-2,
@@ -31,7 +33,8 @@ def train(
 
     :param model: model that will be trained
     :param dict_model: dictionary of model parameters
-    :param dataset: dataset
+    :param dataset_train: dataset for training
+    :param dataset_val: If not none, dataset for validation. Else it will use the same as for training
     :param log_dir: directory where the tensorboard log should be saved
     :param save_path: directory where the model will be saved
     :param lr: learning rate for the training
@@ -47,11 +50,12 @@ def train(
 
     # cpu or gpu used for training if available (gpu much faster)
     device = torch.device('cuda' if torch.cuda.is_available() and not (use_cpu or debug_mode) else 'cpu')
-    print(device)
+    # print(device)
 
     # Tensorboard
     global_step = 0
-    dict_param = {k: v for k, v in locals().items() if k in [
+    # dictionary of training parameters
+    dict_param = {f"train_{k}": v for k, v in locals().items() if k in [
         'lr',
         'optimizer_name',
         'batch_size',
@@ -59,17 +63,31 @@ def train(
         'label_smoothing',
         'use_edge_weight',
     ]}
+    dict_param.update(dict(
+        train_self_loop=dataset_train.add_self_loop,
+        train_drop_edges=dataset_train.drop_edges,
+    ))
+    # dictionary to set model name
+    name_dict = dict_model.copy()
+    name_dict.update(dict_param)
+    # model name
     name_model = '/'.join([
-        str(dict_model)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
-        '/',
-        str(dict_param)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
+        str(name_dict)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
     ])
-    train_logger = tb.SummaryWriter(path.join(log_dir, 'train', name_model), flush_secs=1)
-    valid_logger = tb.SummaryWriter(path.join(log_dir, 'valid', name_model), flush_secs=1)
+
+    # name_model = '/'.join([
+    #     str(dict_model)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
+    #     f"self_loop={dataset_train.add_self_loop}/drop_edges={dataset_train.drop_edges}",
+    #     str(dict_param)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
+    # ])
+    # train_logger = tb.SummaryWriter(path.join(f'{log_dir}_{type(model)}', 'train', name_model), flush_secs=1)
+    # valid_logger = tb.SummaryWriter(path.join(f'{log_dir}_{type(model)}', 'valid', name_model), flush_secs=1)
+    train_logger = tb.SummaryWriter(path.join(log_dir, str(type(model).__name__), name_model), flush_secs=1)
+    valid_logger = train_logger
 
     # Model
+    dict_model.update(dict_param)
     dict_model.update(dict(
-        name=name_model,
         # metrics
         train_loss=None,
         train_acc=0,
@@ -81,9 +99,13 @@ def train(
     # Loss
     loss = torch.nn.CrossEntropyLoss(label_smoothing=label_smoothing).to(device)
 
-    # load data
+    # datasets
+    if dataset_val is None:
+        dataset_val = dataset_train
+
+    # load data -> dataset_train given as parameter
     # loader_train, loader_valid, _ = load_data(
-    #     dataset_path=data_path,
+    #     dataset_train_path=data_path,
     #     num_workers=num_workers,
     #     batch_size=batch_size,
     #     drop_last=False,
@@ -108,23 +130,26 @@ def train(
     else:
         raise Exception("Optimizer not configured")
 
-    print(f"{name_model}")
+    # print(f"{name_model}")
 
     for epoch in range(n_epochs):
-        print(f"{epoch} of {n_epochs}")
+    # for epoch in (p_bar := trange(n_epochs, leave = True)):
+        # p_bar.set_description(f"{name_model} -> best in {dict_model['epoch']}: {dict_model['val_acc']}")
+
+        # print(f"{epoch} of {n_epochs}")
         train_loss = []
-        train_cm = ConfusionMatrix(dataset.num_classes)
+        train_cm = ConfusionMatrix(dataset_train.num_classes)
 
         # Start training: train mode
         model.train()
-        for g in dataset:
+        for g in dataset_train:
             g = g.to(device)
 
             # Get data
-            features = g.ndata['feat']
-            labels = g.ndata['label']
-            edge_weight = g.edata['weight']
-            train_mask = g.ndata['train_mask']
+            features = g.ndata['feat'].to(device)
+            labels = g.ndata['label'].to(device)
+            edge_weight = g.edata['weight'].to(device)
+            train_mask = g.ndata['train_mask'].to(device)
 
             # Compute loss on training and update parameters
             logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
@@ -143,32 +168,32 @@ def train(
         # Can be done in combination with training if drop_edges is 0
         # No performance issue for small graphs so we can separate it
         val_loss = []
-        val_cm = ConfusionMatrix(dataset.num_classes)
-        test_cm = ConfusionMatrix(dataset.num_classes)
+        val_cm = ConfusionMatrix(dataset_train.num_classes)
+        # test_cm = ConfusionMatrix(dataset_train.num_classes)
         model.eval()
         with torch.no_grad():
-            for g in dataset:
+            for g in dataset_val:
                 g = g.to(device)
 
                 # Get data
-                features = g.ndata['feat']
-                labels = g.ndata['label']
-                edge_weight = g.edata['weight']
-                val_mask = g.ndata['val_mask']
-                test_mask = g.ndata['test_mask']
+                features = g.ndata['feat'].to(device)
+                labels = g.ndata['label'].to(device)
+                edge_weight = g.edata['weight'].to(device)
+                val_mask = g.ndata['val_mask'].to(device)
+                # test_mask = g.ndata['test_mask']
 
                 logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
 
                 # Add loss and accuracy
                 val_loss.append(loss(logits[val_mask], labels[val_mask]).cpu().detach().numpy())
                 val_cm.add(logits[val_mask].argmax(1), labels[val_mask])
-                test_cm.add(logits[test_mask].argmax(1), labels[test_mask])
+                # test_cm.add(logits[test_mask].argmax(1), labels[test_mask])
 
         # calculate mean metrics
         train_loss = np.mean(train_loss)
-        train_acc = train_cm.global_accuracy
+        train_acc = train_cm.global_accuracy.item()
         val_loss = np.mean(val_loss)
-        val_acc = val_cm.global_accuracy
+        val_acc = val_cm.global_accuracy.item()
 
         # Step the scheduler to change the learning rate
         if scheduler_mode == "min_loss":
@@ -182,152 +207,218 @@ def train(
         global_step += 1
         if train_logger is not None:
             # train log
-            train_logger.add_scalar('loss', train_loss, global_step=global_step)
-            log_confussion_matrix(train_logger, train_cm, global_step)
+            suffix = 'train'
+            train_logger.add_scalar(f'loss_{suffix}', train_loss, global_step=global_step)
+            log_confussion_matrix(train_logger, train_cm, global_step, suffix=suffix)
             # validation log
-            valid_logger.add_scalar('loss', val_loss, global_step=global_step)
-            log_confussion_matrix(valid_logger, val_cm, global_step)
+            suffix = 'val'
+            valid_logger.add_scalar(f'loss_{suffix}', val_loss, global_step=global_step)
+            log_confussion_matrix(valid_logger, val_cm, global_step, suffix=suffix)
             # learning rate log
             train_logger.add_scalar('lr', optimizer.param_groups[0]['lr'], global_step=global_step)
 
         # Save the model
         if (epoch % steps_validate == steps_validate - 1) and (val_acc >= dict_model["val_acc"]):
             # todo add more info
-            print(f"Best val acc {epoch}: {val_acc}")
+            # print(f"Best val acc {epoch}: {val_acc}")
             dict_model["train_loss"] = train_loss
             dict_model["train_acc"] = train_acc
             dict_model["val_acc"] = val_acc
             dict_model["epoch"] = epoch
-            name_path = name_model.replace('/', '_')
+            # name_path = name_model.replace('/', '_')
+            name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
             save_model(model, save_path, name_path, param_dicts=dict_model)
 
 
-def log_confussion_matrix(logger, confussion_matrix: ConfusionMatrix, global_step: int):
+def log_confussion_matrix(logger, confussion_matrix: ConfusionMatrix, global_step: int, suffix=''):
     """
     Logs the data in the confussion matrix to a logger
     :param logger: tensorboard logger to use for logging
     :param confussion_matrix: confussion matrix from where the metrics are obtained
     :param global_step: global step for the logger
     """
-    logger.add_scalar('acc_global', confussion_matrix.global_accuracy, global_step=global_step)
-    logger.add_scalar('acc_avg', confussion_matrix.average_accuracy, global_step=global_step)
+    logger.add_scalar(f'acc_global_{suffix}', confussion_matrix.global_accuracy, global_step=global_step)
+    logger.add_scalar(f'acc_avg_{suffix}', confussion_matrix.average_accuracy, global_step=global_step)
     for idx, k in enumerate(confussion_matrix.class_accuracy):
-        logger.add_scalar(f'acc_class_{idx}', k, global_step=global_step)
+        logger.add_scalar(f'acc_class_{idx}_{suffix}', k, global_step=global_step)
 
 
-# def test(
-#         data_path: str = './yarnScripts',
-#         save_path: str = './models/saved',
-#         n_runs: int = 1,
-#         batch_size: int = 8,
-#         num_workers: int = 0,
-#         debug_mode: bool = False,
-#         use_cpu: bool = False,
-#         save: bool = True,
-# ) -> None:
-#     """
-#     Calculates the metric on the test set of the model given in args.
-#     Prints the result and saves it in the dictionary files.
+def test(
+        dataset: ContagionDataset,
+        save_path: str = './models/saved',
+        n_runs: int = 1,
+        debug_mode: bool = False,
+        use_cpu: bool = False,
+        save: bool = True,
+        use_edge_weight: bool = True,
+        verbose:bool = False,
+) -> Tuple[Dict, float]:
+    """
+    Calculates the metric on the test set of the model given in args.
+    Prints the result and saves it in the dictionary files.
 
-#     :param data_path: directory where the data can be found
-#     :param save_path: directory where the model will be saved
-#     :param n_runs: number of runs from which to take the mean
-#     :param batch_size: size of batches to use
-#     :param num_workers: number of workers (processes) to use for data loading
-#     :param use_cpu: whether to use the CPU for training
-#     :param debug_mode: whether to use debug mode (cpu and 0 workers)
-#     :param save: whether to save the results in the model dict
-#     """
-#     from pathlib import Path
-#     # cpu or gpu used for training if available (gpu much faster)
-#     device = torch.device('cuda' if torch.cuda.is_available() and not (use_cpu or debug_mode) else 'cpu')
-#     print(device)
-#     # num_workers 0 if debug_mode
-#     if debug_mode:
-#         num_workers = 0
+    :param dataset: dataset
+    :param save_path: directory where the model will be saved
+    :param n_runs: number of runs from which to take the mean
+    :param use_cpu: whether to use the CPU for training
+    :param debug_mode: whether to use debug mode (cpu and 0 workers)
+    :param save: whether to save the results in the model dict
+    :param use_edge_weight: If true, it uses edge weights for training when possible
+    :param verbose: whether to print results
 
-#     # get model names from folder
-#     model = None
-#     for folder_path in Path(save_path).glob('*'):
-#         print(f"Testing {folder_path.name}")
+    :return: returns the best model's dict_model, test accuracy and list of all models with test information
+    """
+    def print_v(s):
+        if verbose:
+            print(s)
 
-#         # load model and data loader
-#         del model
-#         model, dict_model = load_model(folder_path)
-#         model = model.to(device).eval()
-#         _, _, loader_test = load_data(
-#             dataset_path=data_path,
-#             num_workers=num_workers,
-#             batch_size=batch_size,
-#             drop_last=False,
-#             random_seed=123,
-#             tokenizer=model.tokenizer,
-#             device=device,
-#         )
+    from pathlib import Path
+    # cpu or gpu used for training if available (gpu much faster)
+    device = torch.device('cuda' if torch.cuda.is_available() and not (use_cpu or debug_mode) else 'cpu')
+    print_v(device)
+    # # num_workers 0 if debug_mode
+    # if debug_mode:
+    #     num_workers = 0
 
-#         # start testing
-#         test_acc = []
-#         for k in range(n_runs):
-#             run_acc = []
+    # get model names from folder
+    model = None
+    best_dict = None
+    best_acc = 0.0
+    list_all = []
+    paths = list(Path(save_path).glob('*'))
+    for folder_path in tqdm(paths):
+        print_v(f"Testing {folder_path.name}")
 
-#             with torch.no_grad():
-#                 for state, action, reward in loader_test:
-#                     pred = model(state, action)[:, 0]
-#                     run_acc.append(accuracy(pred, reward))
+        # load model and data loader
+        del model
+        model, dict_model = load_model(folder_path)
+        model = model.to(device).eval()
+        # _, _, loader_test = load_data(
+        #     dataset_path=data_path,
+        #     num_workers=num_workers,
+        #     batch_size=batch_size,
+        #     drop_last=False,
+        #     random_seed=123,
+        #     tokenizer=model.tokenizer,
+        #     device=device,
+        # )
 
-#             run_acc = np.mean(run_acc)
-#             print(f"Run {k}: {run_acc}")
-#             test_acc.append(run_acc)
+        # start testing
+        train_acc = []
+        val_acc = []
+        test_acc = []
+        for k in range(n_runs):
+            train_run_cm = ConfusionMatrix(dataset.num_classes)
+            val_run_cm = ConfusionMatrix(dataset.num_classes)
+            test_run_cm = ConfusionMatrix(dataset.num_classes)
 
-#         test_acc = np.mean(test_acc)
-#         dict_result = {"test_acc": test_acc}
+            with torch.no_grad():
+                for g in dataset:
+                    g = g.to(device)
 
-#         print(f"{folder_path.name}: {dict_result}")
-#         dict_model.update(dict_result)
-#         if save:
-#             save_dict(dict_model, f"{folder_path}/{folder_path.name}.dict")
+                    # Get data
+                    features = g.ndata['feat']
+                    labels = g.ndata['label']
+                    edge_weight = g.edata['weight']
+                    train_mask = g.ndata['train_mask']
+                    val_mask = g.ndata['val_mask']
+                    test_mask = g.ndata['test_mask']
+
+                    logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
+
+                    train_run_cm.add(logits[train_mask].argmax(1), labels[train_mask])
+                    val_run_cm.add(logits[val_mask].argmax(1), labels[val_mask])
+                    test_run_cm.add(logits[test_mask].argmax(1), labels[test_mask])
+
+            train_run_acc = train_run_cm.global_accuracy.item()
+            val_run_acc = val_run_cm.global_accuracy.item()
+            test_run_acc = test_run_cm.global_accuracy.item()
+            print_v(f"Run {k}: test {test_run_acc};   valid {val_run_acc}")
+            train_acc.append(train_run_acc)
+            val_acc.append(val_run_acc)
+            test_acc.append(test_run_acc)
+
+        train_acc = np.mean(train_acc)
+        val_acc = np.mean(val_acc)
+        test_acc = np.mean(test_acc)
+        dict_result = {
+            "train_acc": train_acc,
+            "val_acc": val_acc,
+            "test_acc": test_acc,
+        }
+
+        print_v(f"RESULT: {dict_result}")
+
+        dict_model.update(dict_result)
+        if save:
+            save_model(model, str(folder_path.absolute()), folder_path.name, param_dicts=dict_model, save_model=False)
+        
+        list_all.append((dict_model, test_acc, val_run_cm, test_run_cm))
+
+        # save if best
+        if best_acc < test_acc:
+            best_acc = test_acc
+            best_dict = dict_model
+
+    return best_dict, best_acc, list_all
 
 
 def main_train():
+    """
+    A training example
+    """
+    data_dir = './data'
+    log_dir = './models/logs'
+    save_model = './models/saved'
+
     dataset = ContagionDataset(
-        raw_dir='./data',
+        raw_dir=data_dir,
         drop_edges=0,
         sets_lengths=(0.8, 0.1, 0.1),
     )
 
     gcn_model = dict(
-        in_features=[dataset.node_features],
-        h_features=[[5, 5], [5, 10], [10, 5]],
+        in_features=[dataset.num_node_features],
+        h_features=[[5, 10], [10, 15], [5, 5, 5], [5, 5, 5, 5], [5, 10, 15], [5, 10, 15, 20]],
         out_features=[dataset.num_classes],
         activation=[torch.nn.ReLU()],
-        norm_edges=['both'],
+        norm_edges=['both', 'none'],
         norm_nodes=[None, 'bn', 'gn'],
         dropout=[0.2, 0.5, 0.0],
         # other
-        lr=[1e-2, 1, 1e-3],
+        lr=[1],
         label_smoothing=[0.0, 0.2, 0.4],
+        use_edge_weight=[True],
     )
-    list_gcn_model = [dict(zip(gcn_model.keys(), k)) for k in itertools.product(*gcn_model.values())]
+    list_model = [dict(zip(gcn_model.keys(), k)) for k in itertools.product(*gcn_model.values())]
 
-    for d in list_gcn_model:
+    for d in list_model:
         lr = d.pop('lr')
         ls = d.pop('label_smoothing')
-        train(
-            model=GCN(**d),
-            dict_model=d,
-            dataset=dataset,
-            log_dir='./models/logs',
-            save_path='./models/saved',
-            lr=lr,
-            optimizer_name="adamw",
-            n_epochs=100,
-            scheduler_mode='max_val_acc',
-            debug_mode=False,
-            steps_validate=1,
-            use_cpu=False,
-            label_smoothing=ls,
-            use_edge_weight=True,
-        )
+        use_edge_weight = d.pop('use_edge_weight')
+        for drop_edges in [0, 0.2, 0.4]:
+            dataset = ContagionDataset(
+                raw_dir=data_dir,
+                drop_edges=drop_edges,
+                sets_lengths=(0.8, 0.1, 0.1),
+            )
+
+            train(
+                model=GCN(**d),
+                dict_model=d,
+                dataset=dataset,
+                log_dir=log_dir,
+                save_path=save_model,
+                lr=lr,
+                optimizer_name="adamw",
+                n_epochs=100,
+                scheduler_mode='max_val_acc',
+                debug_mode=False,
+                steps_validate=1,
+                use_cpu=False,
+                label_smoothing=ls,
+                use_edge_weight=use_edge_weight,
+            )
 
 
 if __name__ == '__main__':
@@ -341,6 +432,19 @@ if __name__ == '__main__':
     args = args_parser.parse_args()
 
     if args.test is not None:
-        pass
+        dataset = ContagionDataset(
+            raw_dir='./data',
+            drop_edges=0,
+            sets_lengths=(0.8, 0.1, 0.1),
+        )
+        test(
+            dataset=dataset,
+            save_path='./models/saved',
+            n_runs=1,
+            debug_mode=False,
+            use_cpu=False,
+            save=True,
+            use_edge_weight=True,
+        )
     else:
         main_train()
