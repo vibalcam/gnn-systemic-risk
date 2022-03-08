@@ -371,7 +371,7 @@ def load_model(folder_path: pathlib.Path, model_class: Optional[str] = None) -> 
     if model_class is None:
         model_class = dict_model.get(MODEL_CLASS_KEY)
 
-    # get activation object (using pickle instead would solve the problem)
+    # # get activation object (using pickle instead would solve the problem)
     # act_key = dict_model.get(ACTIVATION_KEY, None)
     # if act_key is not None and isinstance(act_key, str):
     #     dict_model[ACTIVATION_KEY] = None if act_key == 'NoneType' else eval(f"torch.nn.{act_key}()")

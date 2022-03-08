@@ -142,7 +142,31 @@ class ContagionDataset(dgl.data.DGLDataset):
         if self.add_self_loop:
             k = k.remove_self_loop().add_self_loop()
 
+        # todo transform labels
+
         return k
+
+
+def labels_to_percentile(labels:torch.Tensor, n_classes:int, random_u:bool = True) -> torch.Tensor:
+    """
+    Transforms a tensor labels with the class importance to a [0,1] value corresponding to its approximate percentile
+
+    :param labels: labels with the class importance
+    :param n_classes: number of classes
+    :param random_u: if true, it will apply a random uniform to the approximate percentile
+    """
+
+    pass
+
+
+def percentile_to_labels(x:torch.Tensor, n_classes:int) -> torch.Tensor:
+    """
+todo finish
+
+    :param x: 
+    :param n_classes: number of classes
+    """
+    pass
 
 
 class ConfusionMatrix:
