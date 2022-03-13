@@ -12,8 +12,10 @@ from glob import glob
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import matthews_corrcoef, mean_squared_error
+import random
+import os
 
-QUANTILES = [0.75, 0.5, 0.25]
+N_TILES = [0.75, 0.5, 0.25]
 NODE_ATTR = [
     'assets',
     'liabilities',
@@ -25,7 +27,11 @@ NETWORK_FILENAME = 'network.csv'
 
 
 class ContagionDataset(dgl.data.DGLDataset):
-    """Class that represents a dataset to train the classifier"""
+    """
+    Class that represents a dataset to train the classifier
+    The graphs have the following node attributes: `feat`, `label`, `perc`, `id`, `train_mask`, `val_mask` and `test_mask`.
+    The graphs have the following edge attributes: `weight`.
+    """
 
     def __init__(
             self,
@@ -33,20 +39,22 @@ class ContagionDataset(dgl.data.DGLDataset):
             drop_edges: float = 0,
             add_self_loop: bool = True,
             sets_lengths: Tuple[float, float, float] = (0.8, 0.1, 0.1),
-            seed: int = 123,
+            # seed: int = 123,
             target: str = 'additional_stress',
             node_attributes: List[str] = NODE_ATTR,
+            # rand_alpha:float = 1,
     ):
         """
-        Initializer for the dataset
+        Initializer for the dataset. 
+
         :param raw_dir: directory where the input data is stored
         :param drop_edges: percentage of edges to remove. Value in [0,1]
         :param add_self_loop: If true, it adds non duplicated self loops
         :param sets_lengths: tuple with percentage of train, validation and test samples
-        :param seed: seed to randomly generate train, valid and test sets
         :param target: column to use as target for quantile calculation
         :param node_features: list of names of the columns to use as node features
         """
+        # :param rand_alpha: for use to calculate approximate percentiles. Look at `labels_to_percentiles()`
         if not (0 <= drop_edges <= 1):
             raise Exception("drop_edges must be a value in [0,1]")
 
@@ -54,13 +62,12 @@ class ContagionDataset(dgl.data.DGLDataset):
         self.sets_lengths = sets_lengths
         self.drop_edges = drop_edges
         self.add_self_loop = add_self_loop
-        self.random_generator = torch.manual_seed(seed)
-        # todo reset random seed
+        # self.random_generator = torch.manual_seed(seed)
+        # :param seed: seed to randomly generate train, valid and test sets
 
-        # todo change this
-        self.num_classes = len(QUANTILES) + 1
+        self.num_classes = len(N_TILES) + 1
         self.node_attributes = node_attributes
-        self.num_node_features = len(self.node_attributes)
+        # self.rand_alpha = rand_alpha
 
         super().__init__(raw_dir=raw_dir, name='contagion', verbose=False)
 
@@ -80,7 +87,7 @@ class ContagionDataset(dgl.data.DGLDataset):
 
         # GET TARGET
 
-        quant = nodes[self.target_col].quantile(QUANTILES)
+        quant = nodes[self.target_col].quantile(N_TILES)
         is_quant = pd.DataFrame()
         free = np.ones(nodes.shape[0]).astype(bool)
         # get those higher than percentile and make them unavailable
@@ -93,8 +100,7 @@ class ContagionDataset(dgl.data.DGLDataset):
         is_quant_np = is_quant.to_numpy().astype(float)
         target_np = is_quant_np.argmax(1)
         self.targets.append(target_np)
-        # to dataframe for to_dict in networkx
-        is_quant = pd.DataFrame(data=target_np, index=is_quant.index, columns=['label'])
+        
 
         # ADD NODE DATA TO GRAPH
 
@@ -105,10 +111,21 @@ class ContagionDataset(dgl.data.DGLDataset):
         nx.set_node_attributes(graph, {k: {"feat": torch.as_tensor(v, dtype=torch.float)} for k, v in
                                        nodes_features.T.to_dict('list').items()})
         # add target
+        is_quant = pd.DataFrame(data=target_np, index=is_quant.index, columns=['label'])
         nx.set_node_attributes(graph, is_quant.to_dict('index'))
 
+        # todo add percentiles
+        # perc = labels_to_percentiles(labels=target_np, n_classes=self.num_classes, rand_alpha=self.rand_alpha)
+        # perc = pd.DataFrame(data=perc, index=is_quant.index, columns=['perc'])
+        # nx.set_node_attributes(graph, perc.to_dict('index'))
+
+
+        # add bank ids
+        nx.set_node_attributes(graph, {k:{'id':int(k[1:])} for k in is_quant.index})
+
         # CREATE DGL GRAPH
-        graph_dgl = dgl.from_networkx(graph, node_attrs=['feat', 'label'], edge_attrs=['weight'])
+        graph_dgl = dgl.from_networkx(graph, node_attrs=['feat', 'label', 'id'], edge_attrs=['weight'])
+
 
         # ADD TRAIN,VALIDATION,TEST MASKS
 
@@ -119,13 +136,18 @@ class ContagionDataset(dgl.data.DGLDataset):
         val_mask[n_train:n_train + n_val] = True
         test_mask[n_train + n_val:] = True
         # shuffle and set mask in nodes
-        idx = torch.randperm(n_nodes, generator=self.random_generator)
+        idx = torch.randperm(n_nodes)
+        # idx = torch.randperm(n_nodes, generator=self.random_generator)
         graph_dgl.ndata['train_mask'] = train_mask[idx]
         graph_dgl.ndata['val_mask'] = val_mask[idx]
         graph_dgl.ndata['test_mask'] = test_mask[idx]
 
         # add to list
         self.graphs.append(graph_dgl)
+
+    @property
+    def num_node_features(self):
+        return len(self.node_attributes)
 
     def __len__(self):
         return len(self.graphs)
@@ -136,37 +158,49 @@ class ContagionDataset(dgl.data.DGLDataset):
         if self.drop_edges > 0:
             k = copy.deepcopy(k)
             n_remove = int(k.num_edges() * self.drop_edges)
-            k.remove_edges(torch.randint(k.num_edges(), size=(n_remove,), generator=self.random_generator))
+            k.remove_edges(torch.randint(k.num_edges(), size=(n_remove,)))
+            # k.remove_edges(torch.randint(k.num_edges(), size=(n_remove,), generator=self.random_generator))
 
         # add self loops
         if self.add_self_loop:
             k = k.remove_self_loop().add_self_loop()
 
-        # todo transform labels
-
         return k
 
 
-def labels_to_percentile(labels:torch.Tensor, n_classes:int, random_u:bool = True) -> torch.Tensor:
-    """
-    Transforms a tensor labels with the class importance to a [0,1] value corresponding to its approximate percentile
+#  todo remove
+# def labels_to_percentiles(labels:np.ndarray, n_classes:int, rand_alpha:float = 1) -> np.ndarray:
+#     """
+#     Transforms a tensor labels with the class importance to a [0,1] value corresponding to its approximate percentile
 
-    :param labels: labels with the class importance
-    :param n_classes: number of classes
-    :param random_u: if true, it will apply a random uniform to the approximate percentile
-    """
+#     :param labels: labels with the class importance
+#     :param n_classes: number of classes
+#     :param rand_alpha: if None, it will use the middle point of the percentile range 
+#                         If not None, it controls the range of the random uniform `[-1/(2n*alpha), -1/(2n*alpha))` added to the middle point
+#                         (alpha > 1 -> classes overlap; alpha = 1 -> classes touch; alpha < 1 -> classes are separated)
 
-    pass
+#     :return: the approximate percentile of each label
+#     """
+#     if rand_alpha is None:
+#         perc_unif = np.zeros(*labels.shape)
+#     else:
+#         # [0,1) -.5 -> [-.5,.5) * 1/n -> [-1/n/2, 1/n/2] / alpha
+#         perc_unif = (np.random.rand(*labels.shape) - 0.5) / (n_classes * rand_alpha)
+
+#     return np.clip(0, (labels / n_classes) + 1/n_classes/2 + perc_unif, 1)
 
 
-def percentile_to_labels(x:torch.Tensor, n_classes:int) -> torch.Tensor:
-    """
-todo finish
+# def percentiles_to_labels(x:torch.Tensor, n_classes:int) -> torch.Tensor:
+#     """
+#     Converts the percentiles to labels such that, for `k integer in [0,n-1]`, percentiles in range `[k/n, (k+1)/n)` will be labeled as k
 
-    :param x: 
-    :param n_classes: number of classes
-    """
-    pass
+#     :param x: percentiles
+#     :param n_classes: number of classes
+
+#     :return: the converted labels
+#     """
+#     labels = torch.clamp((x * n_classes - 1e-6).int(), min=0, max=n_classes-1)
+#     return labels.float()
 
 
 class ConfusionMatrix:
@@ -188,18 +222,19 @@ class ConfusionMatrix:
             matrix[t, p] += 1
         return matrix
 
-    def __init__(self, size=5):
+    def __init__(self, size=5, name:str=''):
         """
         This class builds and updates a confusion matrix.
         :param size: the number of classes to consider
+        :param name: name of the confusion matrix
         """
         self.matrix = torch.zeros(size, size, dtype=torch.float)
         self.preds = None
         self.labels = None
-        self.size = size
+        self.name = name
 
     def __repr__(self) -> str:
-        return self.matrix.__repr__
+        return self.matrix.numpy().__repr__
 
     def add(self, preds: torch.Tensor, labels: torch.Tensor) -> None:
         """
@@ -209,9 +244,14 @@ class ConfusionMatrix:
         """
         preds = preds.reshape(-1).cpu().detach().clone()
         labels = labels.reshape(-1).cpu().detach().clone()
+        
         self.matrix += self._make(preds, labels)
         self.preds = torch.cat((self.preds, preds), dim=0) if self.preds is not None else preds
         self.labels = torch.cat((self.labels, labels), dim=0) if self.labels is not None else labels
+
+    @property
+    def size(self):
+        return self.matrix.shape[0]
 
     @property
     def matthews_corrcoef(self):
@@ -263,9 +303,42 @@ class ConfusionMatrix:
 
         return plt
 
-    def __repr__(self):
-        return self.visualize()
 
+class PercentilesConfusionMatrix(ConfusionMatrix):
+    def __init__(self, size=5, name:str=''):
+        super().__init__(size,name)
+        self.percentiles = None
+        self.true_percentiles = None
+
+    def add(self, preds: torch.Tensor, labels: torch.Tensor, true_percentiles:torch.Tensor = None) -> None:
+        """
+        Updates the confusion matrix using the predicted values `predds` and ground truth `labels`
+        :param preds: predicted values in range [0,3] (B)
+        :param labels: true values (B)
+        :param true_percentiles: the true percentiles in [0,1] (B)
+        """
+        preds = preds.reshape(-1).float().cpu().detach()
+        # save as percentiles
+        if true_percentiles is not None:
+            percentiles = preds / self.size
+            self.percentiles = torch.cat((self.percentiles, percentiles), dim=0) if self.percentiles is not None else percentiles
+            self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles), dim=0) if self.true_percentiles is not None else true_percentiles
+
+        # CONVERT TO LABELS
+        # create matrix [B, self.size]
+        x = preds[:,None].repeat(1,self.size)
+        # create matrix [1, self.size] with limits of each label in [0, self.size-1]
+        lim = (torch.arange(0, self.size-1, (self.size-1)/self.size, dtype=torch.float))[None]
+        # substract one and another to get distance to limit of class
+        dist = (x - lim)
+        # value belongs to class if distance is 0 <= d < (self.size-1)/self.size
+        tmp = torch.logical_and(dist < (self.size-1)/self.size, dist >= 0).int()
+        pred_lab = tmp.argmax(1)
+        # special case of value self.size-1
+        pred_lab[tmp.sum(1) == 0] = self.size-1
+
+        super().add(pred_lab, labels)
+        
 
 def save_dict(d: Dict, path: str, as_str: bool = False) -> None:
     """
@@ -307,11 +380,35 @@ def load_dict(path: str) -> Dict:
 
 
 def set_seed(seed: int) -> None:
+    """
+    This function sets a seed and ensure a deterministic behavior
+
+    Parameters
+    ----------
+    seed : int
+
+    Returns
+    -------
+    None
+    """
+    # todo delete all calls to set seed except this one
+    # set seed in numpy and random
     np.random.seed(seed)
+    random.seed(seed)
+
+    # set seed and deterministic algorithms for torch
     torch.manual_seed(seed)
+    # torch.use_deterministic_algorithms(True)
+
+    # Ensure all operations are deterministic on GPU
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
+        # torch.backends.cudnn.determinstic = True
+        # torch.backends.cudnn.benchmark = False
+
+        # for deterministic behavior on cuda >= 10.2
+        # os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
 
 def load_list(path: str) -> List:

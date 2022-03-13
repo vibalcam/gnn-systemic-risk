@@ -25,6 +25,7 @@ def train(
         debug_mode: bool = False,
         steps_save: int = 1,
         use_cpu: bool = False,
+        device = None,
         label_smoothing: float = 0.0,
         use_edge_weight: bool = True,
 ):
@@ -42,6 +43,7 @@ def train(
     :param n_epochs: number of epochs of training
     :param scheduler_mode: scheduler mode to use for the learning rate scheduler. Can be `min_loss, max_acc, max_val_acc, max_val_mcc`
     :param use_cpu: whether to use the CPU for training
+    :param device: if not none, device to use ignoring other parameters. If none, the device will be used depending on `use_cpu` and `debug_mode` parameters
     :param debug_mode: whether to use debug mode (cpu and 0 workers)
     :param steps_save: number of epoch after which to validate and save model (if conditions met)
     :param label_smoothing: label smoothing applied to CrossEntropyLoss (https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html)
@@ -49,7 +51,8 @@ def train(
     """
 
     # cpu or gpu used for training if available (gpu much faster)
-    device = torch.device('cuda' if torch.cuda.is_available() and not (use_cpu or debug_mode) else 'cpu')
+    if device is None:
+        device = torch.device('cuda' if torch.cuda.is_available() and not (use_cpu or debug_mode) else 'cpu')
     # print(device)
 
     # Tensorboard
@@ -138,7 +141,7 @@ def train(
 
         # print(f"{epoch} of {n_epochs}")
         train_loss = []
-        train_cm = ConfusionMatrix(dataset_train.num_classes)
+        train_cm = ConfusionMatrix(dataset_train.num_classes, name='train')
 
         # Start training: train mode
         model.train()
@@ -168,7 +171,7 @@ def train(
         # Can be done in combination with training if drop_edges is 0
         # No performance issue for small graphs so we can separate it
         val_loss = []
-        val_cm = ConfusionMatrix(dataset_train.num_classes)
+        val_cm = ConfusionMatrix(dataset_train.num_classes, name='val')
         # test_cm = ConfusionMatrix(dataset_train.num_classes)
         model.eval()
         with torch.no_grad():
@@ -176,10 +179,10 @@ def train(
                 g = g.to(device)
 
                 # Get data
-                features = g.ndata['feat'].to(device)
-                labels = g.ndata['label'].to(device)
-                edge_weight = g.edata['weight'].to(device)
-                val_mask = g.ndata['val_mask'].to(device)
+                features = g.ndata['feat']
+                labels = g.ndata['label']
+                edge_weight = g.edata['weight']
+                val_mask = g.ndata['val_mask']
                 # test_mask = g.ndata['test_mask']
 
                 logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
@@ -229,10 +232,13 @@ def train(
             dict_model["epoch"] = epoch+1
             # name_path = name_model.replace('/', '_')
             name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
+            name_path = f"{dict_model['val_acc']:.2f}_{name_path}"
             # if periodic save, then include epoch
             if reg_save:
                 name_path = f"{name_path}_{epoch+1}"
             save_model(model, save_path, name_path, param_dicts=dict_model)
+    
+    return (save_path, name_path)
 
 
 def log_confussion_matrix(logger, confussion_matrix: ConfusionMatrix, global_step: int, suffix=''):
@@ -315,9 +321,9 @@ def test(
         val_cm = []
         test_cm = []
         for k in range(n_runs):
-            train_run_cm = ConfusionMatrix(dataset.num_classes)
-            val_run_cm = ConfusionMatrix(dataset.num_classes)
-            test_run_cm = ConfusionMatrix(dataset.num_classes)
+            train_run_cm = ConfusionMatrix(dataset.num_classes, name='train')
+            val_run_cm = ConfusionMatrix(dataset.num_classes, name='val')
+            test_run_cm = ConfusionMatrix(dataset.num_classes, name='test')
 
             with torch.no_grad():
                 for g in dataset:
@@ -367,7 +373,7 @@ def test(
 
         dict_model.update(dict_result)
         if save:
-            save_model(model, str(folder_path.absolute()), folder_path.name, param_dicts=dict_model, save_model=False)
+            save_model(model, str(folder_path.absolute().parent), folder_path.name, param_dicts=dict_model, save_model=False)
         
         # list_all.append((dict_model, test_acc, val_run_cm, test_run_cm))
 
