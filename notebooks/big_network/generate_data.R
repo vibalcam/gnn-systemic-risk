@@ -21,7 +21,7 @@ liabilities[liabilities < 4] <- runif(length(liabilities[liabilities < 4]))
 # Making sure assets = liabilities
 assets <- sum(liabilities) * (assets/sum(assets))
 
-# Buffer as a function of assets
+# Buffer as a function of liabilities
 buffer <- pmax(0.01, runif(length(liabilities))*liabilities + abs(rnorm(n, 4, 2.6)))
 
 # Weights as a function of assets, buffer and liabilities
@@ -37,13 +37,11 @@ sim_data <- data.frame(bank  = paste0("b", 1:n),
 
 # GENERATE NETWORK
 
-# seed - min. dens. estimation is stochastic
-#set.seed(15) 
-
 # maximum entropy
 #md_mat <- matrix_estimation(sim_data$assets, sim_data$liabilities, method = "me", verbose = F)
 
 # minimum density estimation
+# seed - min. dens. estimation is stochastic
 md_mat <- matrix_estimation(sim_data$assets, sim_data$liabilities, method = "md", verbose = F)
 
 # rownames and colnames for the matrix
@@ -78,16 +76,13 @@ ggplot(netdf, aes(x = x, y = y, xend = xend, yend = yend)) +
 
 # CONTAGION
 
-# The DebtRank methodology proposed by Bardoscia et al (2015) considers a linear shock propagation — briefly, 
-# that means that when a bank loses, say, 10% of its capital buffer, it propagates losses of 10% of its debts to its creditors.
+# The DebtRank methodology proposed by Bardoscia et al (2015) considers a linear shock propagation
 contdr <- contagion(exposures = md_mat, buffer = sim_data$buffer, weights = sim_data$weights, shock = "all", method = "debtrank", verbose = F)
 summary(contdr)
 #plot(contdr)
 
 
-# One can also consider a different propagation method. For example, a bank 
-# may not transmit contagion unless it defaults. To do that, just change the contagion method to threshold.
-
+# a bank may not transmit contagion unless it defaults -> contagion method to threshold.
 # Traditional default cascades simulation
 # contthr <-  contagion(exposures = md_mat, buffer = sim_data$buffer, weights = sim_data$weights, 
 #                       shock = "all", method = "threshold", verbose = F)
@@ -97,20 +92,15 @@ summary(contdr)
 # The contagion() function is flexible and you can simulate arbitrary scenarios with it. For example, 
 # how would simultaneous stress shocks of 1% up to 25% in all banks affect the system? To do that, 
 # just create a list with the shock vectors and pass it to contagion().
-
 # s <- seq(0.01, 0.25, by = 0.01)
 # shocks <- lapply(s, function(x) rep(x, nrow(md_mat)))
 # names(shocks) <- paste(s*100, "pct shock")
-
 # cont <- contagion(exposures = gmd, buffer = sim_data$buffer, shock = shocks, weights = sim_data$weights, method = "debtrank", verbose = F)
 # summary(cont)
 # plot(cont, size = 2.2)
 
 
 # SAVE DATA
-
-#contdr_summary <- summary(contdr)
-#sim_data$DebtRank <- contdr_summary$summary_table$additional_stress
 
 contdr_table <- summary(contdr)$summary_table
 colnames(contdr_table)[1] <- colnames(sim_data)[1]
