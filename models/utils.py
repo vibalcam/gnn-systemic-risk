@@ -98,7 +98,7 @@ class ContagionDataset(dgl.data.DGLDataset):
 
         # pd.qcut returns the corresponding n-tile
         is_quant = (self.num_classes - 1) - pd.qcut(nodes[self.target_col], self.num_classes, labels=False)
-        target_np = is_quant.to_numpy().astype(float)
+        target_np = is_quant.to_numpy().astype(int)
 
         # quant = nodes[self.target_col].quantile(N_TILES)
         # is_quant = pd.DataFrame()
