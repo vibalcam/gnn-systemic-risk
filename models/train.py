@@ -28,6 +28,7 @@ def train(
         device = None,
         label_smoothing: float = 0.0,
         use_edge_weight: bool = True,
+        scheduler_patience:int = 10,
 ):
     """
     Method that trains a given model
@@ -48,6 +49,7 @@ def train(
     :param steps_save: number of epoch after which to validate and save model (if conditions met)
     :param label_smoothing: label smoothing applied to CrossEntropyLoss (https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html)
     :param use_edge_weight: If true, it uses edge weights for training when possible
+    :param scheduler_patience: value used as patience for the learning rate scheduler
     """
 
     # cpu or gpu used for training if available (gpu much faster)
@@ -65,6 +67,7 @@ def train(
         'scheduler_mode',
         'label_smoothing',
         'use_edge_weight',
+        'scheduler_patience',
     ]}
     dict_param.update(dict(
         train_self_loop=dataset_train.add_self_loop,
@@ -127,9 +130,9 @@ def train(
         raise Exception("Optimizer not configured")
 
     if scheduler_mode == "min_loss":
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=scheduler_patience)
     elif scheduler_mode in ["max_acc", "max_val_acc", 'max_val_mcc']:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=10)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=scheduler_patience)
     else:
         raise Exception("Optimizer not configured")
 

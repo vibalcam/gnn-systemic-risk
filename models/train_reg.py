@@ -29,6 +29,7 @@ def train(
         use_edge_weight: bool = True,
         loss_type: str = 'mse',
         base_n: bool = False,
+        scheduler_patience:int = 10,
 ):
     """
     Method that trains a given model
@@ -51,6 +52,7 @@ def train(
     :param loss_type: regression loss to use. Can be `mse, mae`
     :param base_n: if true, class `num_classes-1` will be considered pseudo-percentile `(num_classes-1)/num_classes`
                     otherwise, class `num_classes-1` will be considered pseudo-percentile `1`
+    :param scheduler_patience: value used as patience for the learning rate scheduler
     """
 
     # cpu or gpu used for training if available (gpu much faster)
@@ -68,6 +70,7 @@ def train(
         'scheduler_mode',
         'loss_type',
         'use_edge_weight',
+        'scheduler_patience',
     ]}
     dict_param.update(dict(
         train_self_loop=dataset_train.add_self_loop,
@@ -127,9 +130,9 @@ def train(
         raise Exception("Optimizer not configured")
 
     if scheduler_mode in ["min_loss","min_val_loss", 'min_val_rmse_perc']:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=scheduler_patience)
     elif scheduler_mode in ["max_acc", "max_val_acc", 'max_val_mcc']:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=10)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=scheduler_patience)
     else:
         raise Exception("Optimizer not configured")
 
