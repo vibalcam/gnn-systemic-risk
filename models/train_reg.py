@@ -397,6 +397,10 @@ def test(
                 "val_rmse_perc": np.mean([k.rmse_percentiles for k in val_cm]),
                 "test_rmse_perc": np.mean([k.rmse_percentiles for k in test_cm]),
 
+                "train_mae_perc": np.mean([k.mae_percentiles for k in train_cm]),
+                "val_mae_perc": np.mean([k.mae_percentiles for k in val_cm]),
+                "test_mae_perc": np.mean([k.mae_percentiles for k in test_cm]),
+
                 "train_mcc": np.mean([k.matthews_corrcoef for k in train_cm]),
                 "val_mcc": np.mean([k.matthews_corrcoef for k in val_cm]),
                 "test_mcc": np.mean([k.matthews_corrcoef for k in test_cm]),

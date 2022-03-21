@@ -11,7 +11,7 @@ import pathlib
 from glob import glob
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import matthews_corrcoef, mean_squared_error
+from sklearn.metrics import matthews_corrcoef, mean_squared_error, mean_absolute_error
 import random
 import os
 
@@ -372,6 +372,10 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
     @property
     def rmse_percentiles(self):
         return mean_squared_error(y_true=self.true_percentiles, y_pred=self.pseudo_perc, squared=False)
+
+    @property
+    def mae_percentiles(self):
+        return mean_absolute_error(y_true=self.true_percentiles, y_pred=self.pseudo_perc)
         
 
 def save_dict(d: Dict, path: str, as_str: bool = False) -> None:
