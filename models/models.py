@@ -10,7 +10,6 @@ from models.norm import GraphNorm
 from models.utils import load_dict, save_dict
 
 
-# todo finish
 class FNN(torch.nn.Module):
     def __init__(
             self,
@@ -18,12 +17,12 @@ class FNN(torch.nn.Module):
             h_features: List[int],
             out_features: int,
             activation: torch.nn.Module,
-            norm_nodes: bool = True,
+            norm_nodes: Optional[str] = True,
             dropout: float = 0.0,
             **kwargs,
     ):
         """
-        Feed Forward Network
+        Full Convolutional Neural Network
 
         :param in_features: input feature size
         :param h_features: list of hidden feature size
