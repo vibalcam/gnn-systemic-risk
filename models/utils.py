@@ -423,24 +423,24 @@ def set_seed(seed: int) -> None:
 
     :param seed: seed for the random generators
     """
-    # todo delete all calls to set seed except this one
     # set seed in numpy and random
     np.random.seed(seed)
     random.seed(seed)
 
     # set seed and deterministic algorithms for torch
     torch.manual_seed(seed)
-    torch.use_deterministic_algorithms(True)
+    # torch.use_deterministic_algorithms(True)
 
     # Ensure all operations are deterministic on GPU
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.determinstic = True
-        torch.backends.cudnn.benchmark = False
+        # # make deterministic
+        # torch.backends.cudnn.determinstic = True
+        # torch.backends.cudnn.benchmark = False
 
-        # for deterministic behavior on cuda >= 10.2
-        os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+        # # for deterministic behavior on cuda >= 10.2
+        # os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
 
     # set seed for dataset
     ContagionDataset.seed = seed
