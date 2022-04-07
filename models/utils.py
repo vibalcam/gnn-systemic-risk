@@ -1,6 +1,7 @@
 import copy
 import pickle
 import random
+from pathlib import Path
 from typing import List, Dict, Tuple
 
 import dgl
@@ -11,6 +12,7 @@ import pandas as pd
 import seaborn as sns
 import torch
 from sklearn.metrics import matthews_corrcoef, mean_squared_error, mean_absolute_error
+
 
 # N_TILES = [0.75, 0.5, 0.25]
 NODE_ATTR = [
@@ -426,10 +428,6 @@ def load_list(path: str) -> List:
         from ast import literal_eval
         loaded = list(literal_eval(file.read()))
     return loaded
-
-
-# def get_best_model_info(data, attr:str = 'test_mcc', get_max:bool = True):
-#     pass
 
 
 if __name__ == '__main__':

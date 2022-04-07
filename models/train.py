@@ -60,7 +60,7 @@ def train(
     # Tensorboard
     global_step = 0
     # dictionary of training parameters
-    dict_param = {f"train_{k}": v for k, v in locals().items() if k in [
+    dict_param = {f"tr_par_{k}": v for k, v in locals().items() if k in [
         'lr',
         'optimizer_name',
         'batch_size',
