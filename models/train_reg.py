@@ -28,7 +28,7 @@ def train(
         device=None,
         use_edge_weight: bool = True,
         loss_type: str = 'mse',
-        base_n: bool = False,
+        approach: str = 'scale',
         scheduler_patience: int = 10,
 ):
     """
@@ -50,8 +50,7 @@ def train(
     :param steps_save: number of epoch after which to validate and save model (if conditions met)
     :param use_edge_weight: If true, it uses edge weights for training when possible
     :param loss_type: regression loss to use. Can be `mse, mae`
-    :param base_n: if true, class `num_classes-1` will be considered pseudo-percentile `(num_classes-1)/num_classes`
-                    otherwise, class `num_classes-1` will be considered pseudo-percentile `1`
+    :param approach: the approach to convert the pseudo percentiles into labels. It can be `base_n, scale, scale-dist`
     :param scheduler_patience: value used as patience for the learning rate scheduler
     """
 
@@ -59,6 +58,12 @@ def train(
     if device is None:
         device = torch.device('cuda' if torch.cuda.is_available() and not (use_cpu or debug_mode) else 'cpu')
     # print(device)
+
+    # Get approach for perc to labels
+    if approach not in ['base_n', 'scale', 'scale-dist']:
+        raise Exception(f"Unknown approach {approach}")
+    base_n = approach == 'base_n'
+    equal_dist = approach == 'scale-dist'
 
     # Tensorboard
     global_step = 0
@@ -70,6 +75,7 @@ def train(
         'scheduler_mode',
         'loss_type',
         'use_edge_weight',
+        'approach',
         'scheduler_patience',
     ]}
     dict_param.update(dict(
@@ -290,7 +296,7 @@ def test(
         use_cpu: bool = False,
         save: bool = True,
         use_edge_weight: bool = True,
-        base_n: bool = False,
+        approach: str = 'scale',
         verbose: bool = False,
 ) -> Tuple[Dict, float]:
     """
@@ -304,12 +310,16 @@ def test(
     :param debug_mode: whether to use debug mode (cpu and 0 workers)
     :param save: whether to save the results in the model dict
     :param use_edge_weight: If true, it uses edge weights for training when possible
-    :param base_n: if true, class `num_classes-1` will be considered pseudo-percentile `(num_classes-1)/num_classes`
-                    otherwise, class `num_classes-1` will be considered pseudo-percentile `1`
+    :param approach: the approach to convert the pseudo percentiles into labels. It can be `base_n, scale, scale-dist`
     :param verbose: whether to print results
 
     :return: returns the best model's dict_model, test accuracy and list of all models with test information
     """
+
+    # dict_param = {f"tr_par_{k}": v for k, v in locals().items() if k in [
+    #     'use_edge_weight',
+    #     'approach',
+    # ]}
 
     def print_v(s):
         if verbose:
@@ -322,6 +332,12 @@ def test(
     # # num_workers 0 if debug_mode
     # if debug_mode:
     #     num_workers = 0
+
+    # Get approach for perc to labels
+    if approach not in ['base_n', 'scale', 'scale-dist']:
+        raise Exception(f"Unknown approach {approach}")
+    base_n = approach == 'base_n'
+    equal_dist = approach == 'scale-dist'
 
     # get model names from folder
     model = None

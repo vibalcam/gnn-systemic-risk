@@ -2,7 +2,7 @@ import copy
 import pickle
 import random
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
 
 import dgl
 import matplotlib.pyplot as plt
@@ -197,6 +197,7 @@ class ConfusionMatrix:
     def _make(self, preds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """
         Returns the confusion matrix of the given predicted and labels values
+
         :param preds: predicted values (B)
         :param labels: true values (B)
         :return: (size,size) confusion matrix of `size` classes
@@ -209,6 +210,7 @@ class ConfusionMatrix:
     def __init__(self, size=5, name: str = ''):
         """
         This class builds and updates a confusion matrix.
+
         :param size: the number of classes to consider
         :param name: name of the confusion matrix
         """
@@ -223,6 +225,7 @@ class ConfusionMatrix:
     def add(self, preds: torch.Tensor, labels: torch.Tensor) -> None:
         """
         Updates the confusion matrix using predictions `preds` (e.g. logit.argmax(1)) and ground truth `labels`
+
         :param preds: predicted values (B)
         :param labels: true values (B)
         """
@@ -241,6 +244,10 @@ class ConfusionMatrix:
     def matthews_corrcoef(self):
         """Matthews correlation coefficient (MCC)"""
         return matthews_corrcoef(y_true=self.labels.numpy(), y_pred=self.preds.numpy())
+
+    @property
+    def mae(self):
+        return mean_absolute_error(y_true=self.labels.numpy(), y_pred=self.preds.numpy())
 
     @property
     def rmse(self):
@@ -271,6 +278,7 @@ class ConfusionMatrix:
     def visualize(self, normalize: bool = False):
         """
         Visualize confusion matrix
+
         :param normalize: whether to normalize the matrix by the total amount of samples
         """
         plt.figure(figsize=(15, 10))
@@ -292,6 +300,7 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
     def __init__(self, size=5, name: str = '', base_n: bool = False):
         """
         This class builds and updates a confusion matrix.
+
         :param size: the number of classes to consider
         :param name: name of the confusion matrix
         :param base_n: if true, it will expect to receive predictions in range `[0,self.size]`,
@@ -354,9 +363,31 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
         return mean_absolute_error(y_true=self.true_percentiles, y_pred=self.pseudo_perc)
 
 
+def save_pickle(obj, path: Union[str, Path]):
+    """
+    Saves an object with pickle
+
+    :param obj: object to be saved
+    :param save_path: path to the file where it will be saved
+    """
+    with open(path, 'wb') as f:
+        pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def load_pickle(path: Union[str, Path]):
+    """
+    Loads an object with pickle from a file
+
+    :param path: path to the file where the object is stored
+    """
+    with open(path, 'rb') as f:
+        return pickle.load(f)
+
+
 def save_dict(d: Dict, path: str, as_str: bool = False) -> None:
     """
     Saves a dictionary to a file in plain text
+
     :param d: dictionary to save
     :param path: path of the file where the dictionary will be saved
     :param as_str: If true, it will save as a string. If false, it will use pickle
@@ -365,23 +396,21 @@ def save_dict(d: Dict, path: str, as_str: bool = False) -> None:
         with open(path, 'w', encoding="utf-8") as file:
             file.write(str(d))
     else:
-        with open(path, 'wb') as file:
-            pickle.dump(d, file)
+        save_pickle(d, path)
 
 
 def load_dict(path: str) -> Dict:
     """
     Loads a dictionary from a file (plain text or pickle)
-    :param path: path where the dictionary was saved
 
+    :param path: path where the dictionary was saved
     :return: the loaded dictionary
     """
-    with open(path, 'rb') as file:
-        try:
-            return pickle.load(file)
-        except pickle.UnpicklingError as e:
-            # print(e)
-            pass
+    try:
+        return load_pickle(path)
+    except pickle.UnpicklingError as e:
+        # print(e)
+        pass
 
     with open(path, 'r', encoding="utf-8") as file:
         from ast import literal_eval
@@ -421,6 +450,7 @@ def set_seed(seed: int) -> None:
 def load_list(path: str) -> List:
     """
     Loads a list from a file in plain text
+
     :param path: path where the list was saved
     :return: the loaded list
     """

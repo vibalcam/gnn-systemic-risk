@@ -335,6 +335,10 @@ def test(
             "val_rmse": np.mean([k.rmse for k in val_cm]),
             "test_rmse": np.mean([k.rmse for k in test_cm]),
 
+            "train_mae": np.mean([k.mae for k in train_cm]),
+            "val_mae": np.mean([k.mae for k in val_cm]),
+            "test_mae": np.mean([k.mae for k in test_cm]),
+
             "train_acc": np.mean([k.global_accuracy for k in train_cm]),
             "val_acc": np.mean([k.global_accuracy for k in val_cm]),
             "test_acc": np.mean([k.global_accuracy for k in test_cm]),
