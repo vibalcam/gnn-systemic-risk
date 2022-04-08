@@ -11,6 +11,9 @@ from .models import load_model, save_model
 from .utils import PercentilesConfusionMatrix, ContagionDataset
 
 
+PREFIX_TRAINING_PARAMS = "tr_par_"
+
+
 def train(
         model: torch.nn.Module,
         dict_model: Dict,
@@ -68,7 +71,7 @@ def train(
     # Tensorboard
     global_step = 0
     # dictionary of training parameters
-    dict_param = {f"tr_par_{k}": v for k, v in locals().items() if k in [
+    dict_param = {f"{PREFIX_TRAINING_PARAMS}{k}": v for k, v in locals().items() if k in [
         'lr',
         'optimizer_name',
         'batch_size',
@@ -296,7 +299,7 @@ def test(
         use_cpu: bool = False,
         save: bool = True,
         use_edge_weight: bool = True,
-        approach: str = 'scale',
+        approach_default: str = 'scale',
         verbose: bool = False,
 ) -> Tuple[Dict, float]:
     """
@@ -309,17 +312,15 @@ def test(
     :param use_cpu: whether to use the CPU for training
     :param debug_mode: whether to use debug mode (cpu and 0 workers)
     :param save: whether to save the results in the model dict
-    :param use_edge_weight: If true, it uses edge weights for training when possible
-    :param approach: the approach to convert the pseudo percentiles into labels. It can be `base_n, scale, scale-dist`
+    :param use_edge_weight: If true, it uses edge weights for training when possible.
+                                    Only used if the model's dictionary does not have this parameter
+    :param approach_default: the approach to convert the pseudo percentiles into labels.
+                            It can be `base_n, scale, scale-dist`.
+                            Only used if the model's dictionary does not have this parameter
     :param verbose: whether to print results
 
     :return: returns the best model's dict_model, test accuracy and list of all models with test information
     """
-
-    # dict_param = {f"tr_par_{k}": v for k, v in locals().items() if k in [
-    #     'use_edge_weight',
-    #     'approach',
-    # ]}
 
     def print_v(s):
         if verbose:
@@ -332,12 +333,6 @@ def test(
     # # num_workers 0 if debug_mode
     # if debug_mode:
     #     num_workers = 0
-
-    # Get approach for perc to labels
-    if approach not in ['base_n', 'scale', 'scale-dist']:
-        raise Exception(f"Unknown approach {approach}")
-    base_n = approach == 'base_n'
-    equal_dist = approach == 'scale-dist'
 
     # get model names from folder
     model = None
@@ -353,6 +348,16 @@ def test(
         del model
         model, dict_model = load_model(folder_path)
         model = model.to(device).eval()
+
+        # training parameters
+        use_edge_weight = dict_model.get(f'{PREFIX_TRAINING_PARAMS}use_edge_weight', use_edge_weight)
+        approach = dict_model.get(f'{PREFIX_TRAINING_PARAMS}approach', approach_default)
+
+        # Get approach for perc to labels
+        if approach not in ['base_n', 'scale', 'scale-dist']:
+            raise Exception(f"Unknown approach {approach}")
+        base_n = approach == 'base_n'
+        equal_dist = approach == 'scale-dist'
 
         # dataset as parameter
 

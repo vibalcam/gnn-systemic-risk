@@ -11,6 +11,9 @@ from .models import load_model, save_model, FNN
 from .utils import ConfusionMatrix, ContagionDataset
 
 
+PREFIX_TRAINING_PARAMS = "tr_par_"
+
+
 def train(
         model: torch.nn.Module,
         dict_model: Dict,
@@ -60,7 +63,7 @@ def train(
     # Tensorboard
     global_step = 0
     # dictionary of training parameters
-    dict_param = {f"tr_par_{k}": v for k, v in locals().items() if k in [
+    dict_param = {f"{PREFIX_TRAINING_PARAMS}{k}": v for k, v in locals().items() if k in [
         'lr',
         'optimizer_name',
         'batch_size',
@@ -261,7 +264,8 @@ def test(
     :param use_cpu: whether to use the CPU for training
     :param debug_mode: whether to use debug mode (cpu and 0 workers)
     :param save: whether to save the results in the model dict
-    :param use_edge_weight: If true, it uses edge weights for training when possible
+    :param use_edge_weight: If true, it uses edge weights for training when possible.
+                                    Only used if the model's dictionary does not have this parameter
     :param verbose: whether to print results
 
     :return: returns the best model's dict_model, test accuracy and list of all models with test information
@@ -292,6 +296,9 @@ def test(
         del model
         model, dict_model = load_model(folder_path)
         model = model.to(device).eval()
+
+        # training parameters
+        use_edge_weight = dict_model.get(f'{PREFIX_TRAINING_PARAMS}use_edge_weight', use_edge_weight)
 
         # dataset given as parameter
 
