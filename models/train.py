@@ -91,13 +91,13 @@ def train(
 
     # Model
     dict_model.update(dict_param)
-    dict_model.update(dict(
-        # metrics
-        train_loss=None,
-        train_acc=0,
-        val_acc=0,
-        epoch=0,
-    ))
+    # dict_model.update(dict(
+    #     # metrics
+    #     train_loss=None,
+    #     train_acc=0,
+    #     val_acc=0,
+    #     epoch=0,
+    # ))
     model = model.to(device)
 
     # Loss
@@ -183,19 +183,33 @@ def train(
 
         # calculate mean metrics
         train_loss = np.mean(train_loss)
-        train_acc = train_cm.global_accuracy
+        # train_acc = train_cm.global_accuracy
         val_loss = np.mean(val_loss)
-        val_acc = val_cm.global_accuracy
+        # val_acc = val_cm.global_accuracy
 
         # Step the scheduler to change the learning rate
+        is_better = False
         if scheduler_mode == "min_loss":
-            scheduler.step(train_loss)
+            met = train_loss
+            if (best_met := dict_model.get('train_loss', None)) is not None:
+                is_better = met <= best_met
         elif scheduler_mode == "max_acc":
-            scheduler.step(train_acc)
+            met = train_cm.global_accuracy
+            if (best_met := dict_model.get('train_acc', None)) is not None:
+                is_better = met >= best_met
         elif scheduler_mode == "max_val_acc":
-            scheduler.step(val_acc)
+            met = val_cm.global_accuracy
+            if (best_met := dict_model.get('val_acc', None)) is not None:
+                is_better = met >= best_met
         elif scheduler_mode == 'max_val_mcc':
-            scheduler.step(val_cm.matthews_corrcoef)
+            met = val_cm.matthews_corrcoef
+            if (best_met := dict_model.get('val_mcc', None)) is not None:
+                is_better = met >= best_met
+        else:
+            met = None
+
+        if met is not None:
+            scheduler.step(met)
 
         # log metrics
         global_step += 1
@@ -212,21 +226,24 @@ def train(
             train_logger.add_scalar('lr', optimizer.param_groups[0]['lr'], global_step=global_step)
 
         # Save the model
-        if (reg_save := (epoch % steps_save == steps_save - 1)) or (val_acc >= dict_model["val_acc"]):
+        if (epoch % steps_save == steps_save - 1) or is_better:
+            d = dict_model if is_better else dict_model.copy()
+
             # print(f"Best val acc {epoch}: {val_acc}")
-            dict_model["train_loss"] = train_loss
-            dict_model["train_acc"] = train_acc
-            dict_model["val_acc"] = val_acc
-            dict_model["epoch"] = epoch + 1
+            d["epoch"] = epoch + 1
+            # metrics
+            d["train_loss"] = train_loss
+            d["train_acc"] = train_cm.global_accuracy
+            d["val_acc"] = val_cm.global_accuracy
+            d["val_mcc"] = val_cm.matthews_corrcoef
 
             name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
-            name_path = f"{dict_model['val_acc']:.2f}_{name_path}"
-
+            name_path = f"{d['val_acc']:.2f}_{name_path}"
             # if periodic save, then include epoch
-            if reg_save:
+            if not is_better:
                 name_path = f"{name_path}_{epoch + 1}"
 
-            save_model(model, save_path, name_path, param_dicts=dict_model)
+            save_model(model, save_path, name_path, param_dicts=d)
 
 
 def log_confussion_matrix(logger, confussion_matrix: ConfusionMatrix, global_step: int, suffix=''):
@@ -371,6 +388,7 @@ def test(
             best_dict = dict_model
 
     return best_dict, best_acc, list_all
+
 
 # if __name__ == '__main__':
 #     from argparse import ArgumentParser
