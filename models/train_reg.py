@@ -66,7 +66,7 @@ def train(
     if approach not in ['base_n', 'scale', 'scale-dist']:
         raise Exception(f"Unknown approach {approach}")
     base_n = approach == 'base_n'
-    equal_dist = approach == 'scale-dist'
+    scale_dist = get_mid_range_target if approach == 'scale-dist' else lambda x,n: x
 
     # Tensorboard
     global_step = 0
@@ -159,7 +159,7 @@ def train(
             # Compute loss on training and update parameters
             out = model(g, features, edge_weight=edge_weight if use_edge_weight else None)[:, 0]
             out = sigmoid_scale(out, dataset_train.num_classes, base_n=base_n)
-            loss_train = loss(out[train_mask], labels[train_mask])
+            loss_train = loss(out[train_mask], scale_dist(labels[train_mask], dataset_train.num_classes))
 
             # Do back propagation
             if torch.isnan(loss_train):
@@ -201,7 +201,7 @@ def train(
                 out = sigmoid_scale(out, dataset_train.num_classes, base_n=base_n)
 
                 # Add loss and accuracy
-                val_loss.append(loss(out[val_mask], labels[val_mask]).cpu().detach().numpy())
+                val_loss.append(loss(out[val_mask], scale_dist(labels[val_mask], dataset_train.num_classes)).cpu().detach().numpy())
                 val_cm.add(out[val_mask], labels[val_mask], true_percentiles=percentiles[val_mask])
                 # test_cm.add(out[test_mask], target[test_mask])
 
@@ -266,14 +266,14 @@ def sigmoid_scale(x: torch.Tensor, n_classes: int, base_n: bool = False):
     return x
 
 
-# def get_mid_range_target(labels: torch.Tensor, n_classes:int):
-#     # get intermediate values
-#     mid = (2*labels+1)*(n_classes-1)/(2*n_classes)
-#     # for 0 and n-1 classes, keep labels
-#     not_intermediate = torch.logical_or(labels == 0, labels == (n_classes-1))
-#     mid[not_intermediate] = labels[not_intermediate]
+def get_mid_range_target(labels: torch.Tensor, n_classes:int):
+    # get intermediate values
+    mid = (2*labels+1)*(n_classes-1)/(2*n_classes)
+    # for 0 and n-1 classes, keep labels
+    not_intermediate = torch.logical_or(labels == 0, labels == (n_classes-1))
+    mid[not_intermediate] = labels[not_intermediate]
 
-#     return mid
+    return mid
 
 
 def log_confussion_matrix(logger, confussion_matrix: PercentilesConfusionMatrix, global_step: int, suffix=''):
@@ -357,7 +357,6 @@ def test(
         if approach not in ['base_n', 'scale', 'scale-dist']:
             raise Exception(f"Unknown approach {approach}")
         base_n = approach == 'base_n'
-        equal_dist = approach == 'scale-dist'
 
         # dataset as parameter
 
