@@ -8,7 +8,7 @@ import torch.utils.tensorboard as tb
 from tqdm.auto import tqdm
 
 from .models import load_model, save_model, FNN
-from .utils import ConfusionMatrix, ContagionDataset
+from .utils import ClassConfusionMatrix, ContagionDataset
 
 
 PREFIX_TRAINING_PARAMS = "tr_par_"
@@ -132,7 +132,7 @@ def train(
         # print(f"{epoch} of {n_epochs}")
 
         train_loss = []
-        train_cm = ConfusionMatrix(dataset_train.num_classes, name='train')
+        train_cm = ClassConfusionMatrix(dataset_train.num_classes, name='train')
 
         # Start training: train mode
         model.train()
@@ -140,10 +140,11 @@ def train(
             g = g.to(device)
 
             # Get data
-            features = g.ndata['feat'].to(device)
-            labels = g.ndata['label'].to(device)
-            edge_weight = g.edata['weight'].to(device)
-            train_mask = g.ndata['train_mask'].to(device)
+            features = g.ndata['feat']
+            labels = g.ndata['label']
+            percentiles = g.ndata['perc']
+            edge_weight = g.edata['weight']
+            train_mask = g.ndata['train_mask']
 
             # Compute loss on training and update parameters
             logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
@@ -156,13 +157,13 @@ def train(
 
             # Add train loss and accuracy
             train_loss.append(loss_train.cpu().detach().numpy())
-            train_cm.add(logits[train_mask].argmax(1), labels[train_mask])
+            train_cm.add(logits[train_mask].argmax(1), labels[train_mask], true_percentiles=percentiles[train_mask])
 
         # Evaluate the model
         # Can be done in combination with training if drop_edges is 0
         # No performance issue for small graphs so we can separate it
         val_loss = []
-        val_cm = ConfusionMatrix(dataset_train.num_classes, name='val')
+        val_cm = ClassConfusionMatrix(dataset_train.num_classes, name='val')
 
         model.eval()
         with torch.no_grad():
@@ -172,6 +173,7 @@ def train(
                 # Get data
                 features = g.ndata['feat']
                 labels = g.ndata['label']
+                percentiles = g.ndata['perc']
                 edge_weight = g.edata['weight']
                 val_mask = g.ndata['val_mask']
 
@@ -179,7 +181,7 @@ def train(
 
                 # Add loss and accuracy
                 val_loss.append(loss(logits[val_mask], labels[val_mask]).cpu().detach().numpy())
-                val_cm.add(logits[val_mask].argmax(1), labels[val_mask])
+                val_cm.add(logits[val_mask].argmax(1), labels[val_mask], true_percentiles=percentiles[val_mask])
 
         # calculate mean metrics
         train_loss = np.mean(train_loss)
@@ -246,7 +248,7 @@ def train(
             save_model(model, save_path, name_path, param_dicts=d)
 
 
-def log_confussion_matrix(logger, confussion_matrix: ConfusionMatrix, global_step: int, suffix=''):
+def log_confussion_matrix(logger, confussion_matrix: ClassConfusionMatrix, global_step: int, suffix=''):
     """
     Logs the data in the confussion matrix to a logger
     :param logger: tensorboard logger to use for logging
@@ -324,9 +326,9 @@ def test(
         val_cm = []
         test_cm = []
         for k in range(n_runs):
-            train_run_cm = ConfusionMatrix(dataset.num_classes, name='train')
-            val_run_cm = ConfusionMatrix(dataset.num_classes, name='val')
-            test_run_cm = ConfusionMatrix(dataset.num_classes, name='test')
+            train_run_cm = ClassConfusionMatrix(dataset.num_classes, name='train')
+            val_run_cm = ClassConfusionMatrix(dataset.num_classes, name='val')
+            test_run_cm = ClassConfusionMatrix(dataset.num_classes, name='test')
 
             with torch.no_grad():
                 for g in dataset:
@@ -334,6 +336,7 @@ def test(
 
                     # Get data
                     features = g.ndata['feat']
+                    percentiles = g.ndata['perc']
                     labels = g.ndata['label']
                     edge_weight = g.edata['weight']
                     train_mask = g.ndata['train_mask']
@@ -342,19 +345,15 @@ def test(
 
                     logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
 
-                    train_run_cm.add(logits[train_mask].argmax(1), labels[train_mask])
-                    val_run_cm.add(logits[val_mask].argmax(1), labels[val_mask])
-                    test_run_cm.add(logits[test_mask].argmax(1), labels[test_mask])
+                    train_run_cm.add(logits[train_mask].argmax(1), labels[train_mask], true_percentiles=percentiles[train_mask])
+                    val_run_cm.add(logits[val_mask].argmax(1), labels[val_mask], true_percentiles=percentiles[val_mask])
+                    test_run_cm.add(logits[test_mask].argmax(1), labels[test_mask], true_percentiles=percentiles[test_mask])
 
             train_cm.append(train_run_cm)
             val_cm.append(val_run_cm)
             test_cm.append(test_run_cm)
 
         dict_result = {
-            "train_mcc": np.mean([k.matthews_corrcoef for k in train_cm]),
-            "val_mcc": np.mean([k.matthews_corrcoef for k in val_cm]),
-            "test_mcc": np.mean([k.matthews_corrcoef for k in test_cm]),
-
             "train_rmse": np.mean([k.rmse for k in train_cm]),
             "val_rmse": np.mean([k.rmse for k in val_cm]),
             "test_rmse": np.mean([k.rmse for k in test_cm]),
@@ -363,9 +362,21 @@ def test(
             "val_mae": np.mean([k.mae for k in val_cm]),
             "test_mae": np.mean([k.mae for k in test_cm]),
 
+            "train_mcc": np.mean([k.matthews_corrcoef for k in train_cm]),
+            "val_mcc": np.mean([k.matthews_corrcoef for k in val_cm]),
+            "test_mcc": np.mean([k.matthews_corrcoef for k in test_cm]),
+
             "train_acc": np.mean([k.global_accuracy for k in train_cm]),
             "val_acc": np.mean([k.global_accuracy for k in val_cm]),
             "test_acc": np.mean([k.global_accuracy for k in test_cm]),
+
+            "train_rmse_perc": np.mean([k.rmse_percentiles for k in train_cm]),
+            "val_rmse_perc": np.mean([k.rmse_percentiles for k in val_cm]),
+            "test_rmse_perc": np.mean([k.rmse_percentiles for k in test_cm]),
+
+            "train_mae_perc": np.mean([k.mae_percentiles for k in train_cm]),
+            "val_mae_perc": np.mean([k.mae_percentiles for k in val_cm]),
+            "test_mae_perc": np.mean([k.mae_percentiles for k in test_cm]),
         }
 
         print_v(f"RESULT: {dict_result}")

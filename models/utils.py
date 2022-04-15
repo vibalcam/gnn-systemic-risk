@@ -222,7 +222,7 @@ class ConfusionMatrix:
     def __repr__(self) -> str:
         return self.matrix.numpy().__repr__
 
-    def add(self, preds: torch.Tensor, labels: torch.Tensor) -> None:
+    def add(self, preds: torch.Tensor, labels: torch.Tensor, **kwargs) -> None:
         """
         Updates the confusion matrix using predictions `preds` (e.g. logit.argmax(1)) and ground truth `labels`
 
@@ -296,6 +296,32 @@ class ConfusionMatrix:
         return plt
 
 
+class ClassConfusionMatrix(ConfusionMatrix):
+    def __init__(self, size=5, name: str = ''):
+        super().__init__(size, name)
+        self.true_percentiles = None
+        self.pred_perc = None
+
+    def add(self, preds: torch.Tensor, labels: torch.Tensor, true_percentiles: torch.Tensor) -> None:
+        super().add(preds, labels)
+
+        true_percentiles = true_percentiles.reshape(-1).cpu().detach().clone()
+        self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles),
+                                          dim=0) if self.true_percentiles is not None else true_percentiles
+
+        pred_perc = preds.reshape(-1).cpu().detach().clone() / self.size + 1 / (2 * self.size)
+        self.pred_perc = torch.cat((self.pred_perc, pred_perc),
+                                          dim=0) if self.pred_perc is not None else pred_perc
+
+    @property
+    def rmse_percentiles(self):
+        return mean_squared_error(y_true=self.true_percentiles, y_pred=self.pred_perc, squared=False)
+
+    @property
+    def mae_percentiles(self):
+        return mean_absolute_error(y_true=self.true_percentiles, y_pred=self.pred_perc)
+
+
 class PercentilesConfusionMatrix(ConfusionMatrix):
     def __init__(self, size=5, name: str = '', base_n: bool = False):
         """
@@ -311,7 +337,7 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
         self.true_percentiles = None
         self.base_n = base_n
 
-    def add(self, preds: torch.Tensor, labels: torch.Tensor, true_percentiles: torch.Tensor = None) -> None:
+    def add(self, preds: torch.Tensor, labels: torch.Tensor, true_percentiles: torch.Tensor) -> None:
         """
         Updates the confusion matrix using the predicted values `predds` and ground truth `labels`.
         0 corresponds to percentile 100
@@ -323,17 +349,16 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
         preds = preds.reshape(-1).cpu().detach().clone()
 
         # save as percentiles
-        if true_percentiles is not None:
-            true_percentiles = true_percentiles.reshape(-1).cpu().detach().clone()
-            # to get pseudo-percentiles in [0,1] and with 0 being the lowest and 1 the highest
-            if self.base_n:
-                pseudo_perc = 1 - (preds / self.size)
-            else:
-                pseudo_perc = 1 - (preds / (self.size - 1))
-            self.pseudo_perc = torch.cat((self.pseudo_perc, pseudo_perc),
-                                         dim=0) if self.pseudo_perc is not None else pseudo_perc
-            self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles),
-                                              dim=0) if self.true_percentiles is not None else true_percentiles
+        true_percentiles = true_percentiles.reshape(-1).cpu().detach().clone()
+        # to get pseudo-percentiles in [0,1] and with 0 being the lowest and 1 the highest
+        if self.base_n:
+            pseudo_perc = 1 - (preds / self.size)
+        else:
+            pseudo_perc = 1 - (preds / (self.size - 1))
+        self.pseudo_perc = torch.cat((self.pseudo_perc, pseudo_perc),
+                                     dim=0) if self.pseudo_perc is not None else pseudo_perc
+        self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles),
+                                          dim=0) if self.true_percentiles is not None else true_percentiles
 
         # CONVERT TO LABELS
 
