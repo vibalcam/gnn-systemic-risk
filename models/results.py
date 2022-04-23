@@ -106,8 +106,7 @@ class ResultCollection:
         data = [k.df_metrics_sort(metric=metric, maximize=maximize).head(1) for k in self.results.values()]
         df = pd.concat(data)
         df.set_index('name', inplace=True)
-        return df.sort_values(axis=1, by=metric, ascending=not maximize, na_position='last')
-
+        return df.sort_values(axis=0, by=metric, ascending=not maximize, na_position='last')
 
 
 # def pretty(ld, indent=0):
