@@ -283,8 +283,13 @@ MODEL_CLASS_KEY = 'model_class'
 FOLDER_PATH_KEY = 'path_name'
 
 
-def save_model(model: torch.nn.Module, folder: str, model_name: str, param_dicts: Dict = None,
-               save_model: bool = True) -> None:
+def save_model(
+    model: torch.nn.Module,
+    folder: str,
+    model_name: str,
+    param_dicts: Dict = None,
+    save_model: bool = True
+) -> None:
     """
     Saves the model so it can be loaded after
 
@@ -339,7 +344,7 @@ def load_model(folder_path: pathlib.Path, model_class: Optional[str] = None) -> 
         model_class = dict_model.get(MODEL_CLASS_KEY)
 
     # set folder path
-    dict_model[FOLDER_PATH_KEY] = folder_path.name
+    dict_model[FOLDER_PATH_KEY] = str(folder_path.absolute())
 
     return load_model_data(MODEL_CLASS[model_class](**dict_model), f"{path}.th"), dict_model
 

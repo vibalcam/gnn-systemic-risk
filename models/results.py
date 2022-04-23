@@ -5,11 +5,25 @@ import numpy as np
 import pandas as pd
 
 from models.models import load_model, save_model
+import itertools
 
 
 class ResultCollection:
     class Result:
-        METRIC_PREFIX = ['train_', 'val_', 'test_']
+        # METRIC_PREFIX = ['train_', 'val_', 'test_']
+        METRIC_PREFIX = [i+j for i in [
+                'train_', 
+                'val_', 
+                'test_',
+            ] for j in [
+                "rmse",
+                "mae",
+                "mcc",
+                "acc",
+                "rmse_perc",
+                "mae_perc",
+            ]
+        ]
 
         def __init__(self, data: List[Dict], name: str):
             self.data = data
@@ -26,7 +40,7 @@ class ResultCollection:
             sort_idx = np.argsort([k['dict'][metric] for k in self.data])
             if max:
                 sort_idx = sort_idx[::-1]
-            return self.data[sort_idx]
+            return [self.data[k] for k in sort_idx]
 
         def save_best(self, metric: str,folder: str, maximize: bool = True, filename: str = None):
             """
@@ -50,7 +64,7 @@ class ResultCollection:
             """
             Returns a DataFrame of the data
             """
-            return pd.DataFrame(data=self.data).assign(name=self.name)
+            return pd.DataFrame(data=[k['dict'] for k in self.data]).assign(name=self.name)
 
         @property
         def df_metrics(self) -> pd.DataFrame:
@@ -58,7 +72,7 @@ class ResultCollection:
             Returns a DataFrame of the data metrics
             """
             df = self.df
-            cols = [k for k in df.columns if any([i in k for i in self.METRIC_PREFIX])]
+            cols = [k for k in df.columns if any([i in k for i in self.METRIC_PREFIX + ['name']])]
             return df[cols]
 
         def df_metrics_sort(self, metric: str, maximize: bool = True) -> pd.DataFrame:
@@ -70,7 +84,7 @@ class ResultCollection:
             :return: a pandas DataFrame
             """
             df = self.df_metrics
-            return df.sort_values(axis=1, by=metric, ascending=not maximize, na_position='last', ignore_index=True)
+            return df.sort_values(axis=0, by=metric, ascending=not maximize, na_position='last', ignore_index=True)
 
     def __init__(self):
         self.results = {}
@@ -89,7 +103,7 @@ class ResultCollection:
         :param maximize: whether to return the max first
         :return: a pandas DataFrame
         """
-        data = [k.df_metrics_sort(metric=metric, maximize=maximize) for k in self.results.values()]
+        data = [k.df_metrics_sort(metric=metric, maximize=maximize).head(1) for k in self.results.values()]
         df = pd.concat(data)
         df.set_index('name', inplace=True)
         return df.sort_values(axis=1, by=metric, ascending=not maximize, na_position='last')

@@ -220,7 +220,7 @@ class ConfusionMatrix:
         self.name = name
 
     def __repr__(self) -> str:
-        return self.matrix.numpy().__repr__
+        return self.matrix.numpy().__repr__()
 
     def add(self, preds: torch.Tensor, labels: torch.Tensor, **kwargs) -> None:
         """
@@ -309,7 +309,9 @@ class ClassConfusionMatrix(ConfusionMatrix):
         self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles),
                                           dim=0) if self.true_percentiles is not None else true_percentiles
 
-        pred_perc = preds.reshape(-1).cpu().detach().clone() / self.size + 1 / (2 * self.size)
+        # use mean/median as predicted percentile (since it minimizes the MSE/MAE)
+        preds = preds.reshape(-1).cpu().detach().clone()
+        pred_perc = 1 - (preds / self.size + 1 / (2 * self.size))
         self.pred_perc = torch.cat((self.pred_perc, pred_perc),
                                           dim=0) if self.pred_perc is not None else pred_perc
 
@@ -350,7 +352,7 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
 
         # save as percentiles
         true_percentiles = true_percentiles.reshape(-1).cpu().detach().clone()
-        # to get pseudo-percentiles in [0,1] and with 0 being the lowest and 1 the highest
+        # pseudo-percentiles in [0,1] (0 being the lowest and 1 the highest) to percentiles [0,1]
         if self.base_n:
             pseudo_perc = 1 - (preds / self.size)
         else:
