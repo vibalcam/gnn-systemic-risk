@@ -1,5 +1,5 @@
 import pathlib
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union
 
 import dgl
 import dgl.nn.pytorch as dglnn
@@ -285,7 +285,7 @@ FOLDER_PATH_KEY = 'path_name'
 
 def save_model(
     model: torch.nn.Module,
-    folder: str,
+    folder: Union[pathlib.Path,str],
     model_name: str,
     param_dicts: Dict = None,
     save_model: bool = True
@@ -344,7 +344,7 @@ def load_model(folder_path: pathlib.Path, model_class: Optional[str] = None) -> 
         model_class = dict_model.get(MODEL_CLASS_KEY)
 
     # set folder path
-    dict_model[FOLDER_PATH_KEY] = str(folder_path.absolute())
+    dict_model[FOLDER_PATH_KEY] = str(folder_path)
 
     return load_model_data(MODEL_CLASS[model_class](**dict_model), f"{path}.th"), dict_model
 

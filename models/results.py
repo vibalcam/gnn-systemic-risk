@@ -54,7 +54,7 @@ class ResultCollection:
                 filename = f"best_{self.name}"
 
             d = self.sort_best(metric=metric, max=maximize)[0]
-            model, d_model = load_model(Path(f"{folder}/{d['dict']['path_name']}"))
+            model, d_model = load_model(Path(f"{d['dict']['path_name']}"))
             save_model(model, folder, filename, d_model)
 
             return d
@@ -72,7 +72,8 @@ class ResultCollection:
             Returns a DataFrame of the data metrics
             """
             df = self.df
-            cols = [k for k in df.columns if any([i in k for i in self.METRIC_PREFIX + ['name']])]
+            cols = [k for k in df.columns if k in self.METRIC_PREFIX + ['name']]
+            # cols = [k for k in df.columns if any([i in k for i in self.METRIC_PREFIX + ['name']])]
             return df[cols]
 
         def df_metrics_sort(self, metric: str, maximize: bool = True) -> pd.DataFrame:
@@ -106,7 +107,7 @@ class ResultCollection:
         data = [k.df_metrics_sort(metric=metric, maximize=maximize).head(1) for k in self.results.values()]
         df = pd.concat(data)
         df.set_index('name', inplace=True)
-        return df.sort_values(axis=0, by=metric, ascending=not maximize, na_position='last')
+        return df.sort_values(axis=0, by=['name',metric], ascending=not maximize, na_position='last')
 
 
 # def pretty(ld, indent=0):
