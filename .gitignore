@@ -14,12 +14,4 @@ systemic-risk-predictor.Rproj
 
 **/saved*/*
 # Best models
-# !notebooks/europe_network/models_clas_10/saved_fnn/0.65_4_\[100_100_100\]_4_ReLU()_gn_0.0_0.1_adamw_max_val_mcc_0.0_False_20_False_0_80
-# !notebooks/europe_network/models_clas_10/saved_sage/0.74_4_\[200_200\]_4_lstm_none_gn_ReLU()_0.0_0.01_adamw_max_val_mcc_0_True_500_True_0_800
-
-# !notebooks/europe_network/models_clas_40/saved_fnn/0.67_4_\[100_100_100\]_4_ReLU()_gn_0.0_0.1_adamw_max_val_mcc_0.2_False_20_False_0_50
-# !notebooks/europe_network/models_clas_40/saved_sage/0.71_4_\[500_500\]_4_lstm_none_gn_ReLU()_0_0.01_adamw_max_val_mcc_0.0_True_300_True_0_900
-
-# !notebooks/europe_network/models_clas_75/saved_fnn/0.55_4_\[100_100_100\]_4_ReLU()_gn_0.0_0.1_adamw_max_val_mcc_0.2_False_20_False_0_60
-# !notebooks/europe_network/models_clas_75/saved_sage/0.77_4_\[500_500\]_4_lstm_none_gn_ReLU()_0_0.01_adamw_max_val_mcc_0.0_True_300_True_0.2_800
-
+!notebooks/**/best_*

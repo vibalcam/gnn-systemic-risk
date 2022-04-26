@@ -25,9 +25,10 @@ class ResultCollection:
             ]
         ]
 
-        def __init__(self, data: List[Dict], name: str):
+        def __init__(self, data: List[Dict], name: str, **kwargs):
             self.data = data
             self.name = name
+            self.other = kwargs
 
         def sort_best(self, metric: str, max: bool = True):
             """
@@ -90,8 +91,8 @@ class ResultCollection:
     def __init__(self):
         self.results = {}
 
-    def add(self, data: List[Dict], name: str) -> Result:
-        r = self.Result(data, name)
+    def add(self, data: List[Dict], name: str, **kwargs) -> Result:
+        r = self.Result(data, name, **kwargs)
         self.results[name] = r
         return r
 
