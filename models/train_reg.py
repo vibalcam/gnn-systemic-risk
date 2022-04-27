@@ -212,6 +212,7 @@ def train(
         val_acc = val_cm.global_accuracy
 
         # Step the scheduler to change the learning rate
+        # todo arreglar el save best
         if scheduler_mode == "min_loss":
             scheduler.step(train_loss)
         elif scheduler_mode == "min_val_loss":

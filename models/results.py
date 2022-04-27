@@ -10,7 +10,7 @@ import itertools
 
 class ResultCollection:
     class Result:
-        # METRIC_PREFIX = ['train_', 'val_', 'test_']
+        # list of metrics to be filtered
         METRIC_PREFIX = [i+j for i in [
                 'train_', 
                 'val_', 
@@ -25,10 +25,21 @@ class ResultCollection:
             ]
         ]
 
-        def __init__(self, data: List[Dict], name: str, **kwargs):
+        def __init__(self, data: List[Dict],  uid:str, group: str = None, **kwargs):
+            """
+            Object used to present the results from the testing
+
+            :param List[Dict] data: list of dictionaries with the different metrics obtained
+            :param str uid: unique identifier for the data
+            :param str group: group to which the data belongs, defaults to None
+            :param kwargs: any other info to attach to the data
+            """
+            self.uid = uid 
             self.data = data
-            self.name = name
+            self.group = group if group is not None else uid
             self.other = kwargs
+
+            self.filter_columns = self.METRIC_PREFIX + ['uid', 'group'] + list(self.other.key())
 
         def sort_best(self, metric: str, max: bool = True):
             """
@@ -52,7 +63,7 @@ class ResultCollection:
             :return: the best sample
             """
             if filename is None:
-                filename = f"best_{self.name}"
+                filename = f"best_{self.uid}"
 
             d = self.sort_best(metric=metric, max=maximize)[0]
             model, d_model = load_model(Path(f"{d['dict']['path_name']}"))
@@ -65,7 +76,8 @@ class ResultCollection:
             """
             Returns a DataFrame of the data
             """
-            return pd.DataFrame(data=[k['dict'] for k in self.data]).assign(name=self.name)
+            return pd.DataFrame(data=[k['dict'] for k in self.data])\
+                .assign(group=self.group, uid=self.uid, **self.other)    
 
         @property
         def df_metrics(self) -> pd.DataFrame:
@@ -73,7 +85,7 @@ class ResultCollection:
             Returns a DataFrame of the data metrics
             """
             df = self.df
-            cols = [k for k in df.columns if k in self.METRIC_PREFIX + ['name']]
+            cols = [k for k in df.columns if k in self.filter_columns]
             # cols = [k for k in df.columns if any([i in k for i in self.METRIC_PREFIX + ['name']])]
             return df[cols]
 
@@ -91,9 +103,12 @@ class ResultCollection:
     def __init__(self):
         self.results = {}
 
-    def add(self, data: List[Dict], name: str, **kwargs) -> Result:
-        r = self.Result(data, name, **kwargs)
-        self.results[name] = r
+    def add(self, data: List[Dict], uid: str, group: str = None, **kwargs) -> Result:
+        """
+        Adds a result to the collection and returns it
+        """
+        r = self.Result(data, uid, group, **kwargs)
+        self.results[uid] = r
         return r
 
     def df(self, metric: str, maximize: bool = True):
@@ -107,8 +122,8 @@ class ResultCollection:
         """
         data = [k.df_metrics_sort(metric=metric, maximize=maximize).head(1) for k in self.results.values()]
         df = pd.concat(data)
-        df.set_index('name', inplace=True)
-        return df.sort_values(axis=0, by=['name',metric], ascending=not maximize, na_position='last')
+        df.set_index('uid', inplace=True)
+        return df.sort_values(axis=0, by=['group',metric], ascending=not maximize, na_position='last')
 
 
 # def pretty(ld, indent=0):

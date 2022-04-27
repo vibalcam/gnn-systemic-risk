@@ -190,24 +190,35 @@ def train(
         # val_acc = val_cm.global_accuracy
 
         # Step the scheduler to change the learning rate
-        # todo arreglar el save best
         is_better = False
         if scheduler_mode == "min_loss":
             met = train_loss
             if (best_met := dict_model.get('train_loss', None)) is not None:
                 is_better = met <= best_met
+            else:
+                dict_model['train_loss'] = met
+                is_better = True
         elif scheduler_mode == "max_acc":
             met = train_cm.global_accuracy
             if (best_met := dict_model.get('train_acc', None)) is not None:
                 is_better = met >= best_met
+            else:
+                dict_model['train_acc'] = met
+                is_better = True
         elif scheduler_mode == "max_val_acc":
             met = val_cm.global_accuracy
             if (best_met := dict_model.get('val_acc', None)) is not None:
                 is_better = met >= best_met
+            else:
+                dict_model['val_acc'] = met
+                is_better = True
         elif scheduler_mode == 'max_val_mcc':
             met = val_cm.matthews_corrcoef
             if (best_met := dict_model.get('val_mcc', None)) is not None:
                 is_better = met >= best_met
+            else:
+                dict_model['val_mcc'] = met
+                is_better = True
         else:
             met = None
 
