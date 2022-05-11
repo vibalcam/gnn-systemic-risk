@@ -31,7 +31,7 @@ def train(
         device=None,
         use_edge_weight: bool = True,
         loss_type: str = 'mse',
-        approach: str = 'scale',
+        approach: str = 'scale-dist',
         scheduler_patience: int = 10,
 ):
     """
@@ -98,13 +98,13 @@ def train(
 
     # Model
     dict_model.update(dict_param)
-    dict_model.update(dict(
-        # metrics
-        train_loss=None,
-        train_acc=0,
-        val_acc=0,
-        epoch=0,
-    ))
+    # dict_model.update(dict(
+    #     # metrics
+    #     train_loss=None,
+    #     train_acc=0,
+    #     val_acc=0,
+    #     epoch=0,
+    # ))
     model = model.to(device)
 
     # Loss
@@ -207,24 +207,73 @@ def train(
 
         # calculate mean metrics
         train_loss = np.mean(train_loss)
-        train_acc = train_cm.global_accuracy
+        # train_acc = train_cm.global_accuracy
         val_loss = np.mean(val_loss)
-        val_acc = val_cm.global_accuracy
+        # val_acc = val_cm.global_accuracy
 
         # Step the scheduler to change the learning rate
-        # todo arreglar el save best
+        is_better = False
         if scheduler_mode == "min_loss":
-            scheduler.step(train_loss)
+            met = train_loss
+            if (best_met := dict_model.get('train_loss', None)) is not None:
+                is_better = met <= best_met
+            else:
+                dict_model['train_loss'] = met
+                is_better = True
         elif scheduler_mode == "min_val_loss":
-            scheduler.step(val_loss)
+            met = val_loss
+            if (best_met := dict_model.get('val_loss', None)) is not None:
+                is_better = met <= best_met
+            else:
+                dict_model['val_loss'] = met
+                is_better = True
         elif scheduler_mode == "max_acc":
-            scheduler.step(train_acc)
+            met = train_cm.global_accuracy
+            if (best_met := dict_model.get('train_acc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['train_acc'] = met
+                is_better = True
         elif scheduler_mode == "max_val_acc":
-            scheduler.step(val_acc)
+            met = val_cm.global_accuracy
+            if (best_met := dict_model.get('val_acc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['val_acc'] = met
+                is_better = True
         elif scheduler_mode == 'max_val_mcc':
-            scheduler.step(val_cm.matthews_corrcoef)
-        elif scheduler_mode == 'min_val_rmse_perc':
-            scheduler.step(val_cm.rmse_percentiles)
+            met = val_cm.matthews_corrcoef
+            if (best_met := dict_model.get('val_mcc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['val_mcc'] = met
+                is_better = True
+        elif scheduler_mode == "min_val_rmse_perc":
+            met = val_cm.rmse_percentiles
+            if (best_met := dict_model.get('val_rmse_perc', None)) is not None:
+                is_better = met <= best_met
+            else:
+                dict_model['val_rmse_perc'] = met
+                is_better = True
+        else:
+            met = None
+
+        if met is not None:
+            scheduler.step(met)
+
+        # # Step the scheduler to change the learning rate
+        # if scheduler_mode == "min_loss":
+        #     scheduler.step(train_loss)
+        # elif scheduler_mode == "min_val_loss":
+        #     scheduler.step(val_loss)
+        # elif scheduler_mode == "max_acc":
+        #     scheduler.step(train_acc)
+        # elif scheduler_mode == "max_val_acc":
+        #     scheduler.step(val_acc)
+        # elif scheduler_mode == 'max_val_mcc':
+        #     scheduler.step(val_cm.matthews_corrcoef)
+        # elif scheduler_mode == 'min_val_rmse_perc':
+        #     scheduler.step(val_cm.rmse_percentiles)
 
         # log metrics
         global_step += 1
@@ -241,18 +290,44 @@ def train(
             train_logger.add_scalar('lr', optimizer.param_groups[0]['lr'], global_step=global_step)
 
         # Save the model
-        if (reg_save := (epoch % steps_save == steps_save - 1)) or (val_acc >= dict_model["val_acc"]):
+        if (is_periodic := epoch % steps_save == steps_save - 1) or is_better:
+            d = dict_model if is_better else dict_model.copy()
+
             # print(f"Best val acc {epoch}: {val_acc}")
-            dict_model["train_loss"] = train_loss
-            dict_model["train_acc"] = train_acc
-            dict_model["val_acc"] = val_acc
-            dict_model["epoch"] = epoch + 1
+            d["epoch"] = epoch + 1
+            # metrics
+            d["train_loss"] = train_loss
+            d["val_loss"] = val_loss
+            d["train_acc"] = train_cm.global_accuracy
+            d["val_acc"] = val_cm.global_accuracy
+            d["val_mcc"] = val_cm.matthews_corrcoef
+            d["val_rmse_perc"] = val_cm.rmse_percentiles
 
             name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
+            name_path = f"{d['val_acc']:.2f}_{name_path}"
+            
+            if is_better:
+                save_model(model, save_path, name_path, param_dicts=d)
             # if periodic save, then include epoch
-            if reg_save:
+            if is_periodic:
                 name_path = f"{name_path}_{epoch + 1}"
-            save_model(model, save_path, name_path, param_dicts=dict_model)
+                save_model(model, save_path, name_path, param_dicts=d)
+
+
+
+        # # Save the model
+        # if (reg_save := (epoch % steps_save == steps_save - 1)) or (val_acc >= dict_model["val_acc"]):
+        #     # print(f"Best val acc {epoch}: {val_acc}")
+        #     dict_model["train_loss"] = train_loss
+        #     dict_model["train_acc"] = train_acc
+        #     dict_model["val_acc"] = val_acc
+        #     dict_model["epoch"] = epoch + 1
+
+        #     name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
+        #     # if periodic save, then include epoch
+        #     if reg_save:
+        #         name_path = f"{name_path}_{epoch + 1}"
+        #     save_model(model, save_path, name_path, param_dicts=dict_model)
 
 
 def sigmoid_scale(x: torch.Tensor, n_classes: int, base_n: bool = False):
@@ -300,8 +375,9 @@ def test(
         use_cpu: bool = False,
         save: bool = True,
         use_edge_weight: bool = True,
-        approach_default: str = 'scale',
+        approach_default: str = 'scale-dist',
         verbose: bool = False,
+        **kwargs,
 ) -> Tuple[Dict, float]:
     """
     Calculates the metric on the test set of the model given in args.
@@ -343,6 +419,10 @@ def test(
     paths = list(Path(save_path).glob('*'))
 
     for folder_path in tqdm(paths):
+        # check if not emtpy
+        if not any(folder_path.iterdir()):
+            continue
+        
         print_v(f"Testing {folder_path.name}")
 
         # load model and data loader

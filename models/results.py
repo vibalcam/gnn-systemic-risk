@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List, Dict
+from unittest import result
 
 import numpy as np
 import pandas as pd
@@ -11,17 +12,17 @@ import itertools
 class ResultCollection:
     class Result:
         # list of metrics to be filtered
-        METRIC_PREFIX = [i+j for i in [
+        METRIC_PREFIX = [j+i for i in [
+                "mcc",
+                "acc",
+                "rmse",
+                "mae",
+                "rmse_perc",
+                "mae_perc",
+            ] for j in [
                 'train_', 
                 'val_', 
                 'test_',
-            ] for j in [
-                "rmse",
-                "mae",
-                "mcc",
-                "acc",
-                "rmse_perc",
-                "mae_perc",
             ]
         ]
 
@@ -39,7 +40,7 @@ class ResultCollection:
             self.group = group if group is not None else uid
             self.other = kwargs
 
-            self.filter_columns = self.METRIC_PREFIX + ['uid', 'group'] + list(self.other.key())
+            self.filter_columns = self.METRIC_PREFIX + ['uid', 'group'] + list(self.other.keys())
 
         def sort_best(self, metric: str, max: bool = True):
             """
@@ -85,7 +86,7 @@ class ResultCollection:
             Returns a DataFrame of the data metrics
             """
             df = self.df
-            cols = [k for k in df.columns if k in self.filter_columns]
+            cols = [k for k in self.filter_columns if k in df.columns]
             # cols = [k for k in df.columns if any([i in k for i in self.METRIC_PREFIX + ['name']])]
             return df[cols]
 
@@ -120,6 +121,9 @@ class ResultCollection:
         :param maximize: whether to return the max first
         :return: a pandas DataFrame
         """
+        if not self.results:
+            return pd.DataFrame()
+
         data = [k.df_metrics_sort(metric=metric, maximize=maximize).head(1) for k in self.results.values()]
         df = pd.concat(data)
         df.set_index('uid', inplace=True)

@@ -240,7 +240,7 @@ def train(
             train_logger.add_scalar('lr', optimizer.param_groups[0]['lr'], global_step=global_step)
 
         # Save the model
-        if (epoch % steps_save == steps_save - 1) or is_better:
+        if (is_periodic := epoch % steps_save == steps_save - 1) or is_better:
             d = dict_model if is_better else dict_model.copy()
 
             # print(f"Best val acc {epoch}: {val_acc}")
@@ -253,9 +253,13 @@ def train(
 
             name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
             name_path = f"{d['val_acc']:.2f}_{name_path}"
+            
+            if is_better:
+                save_model(model, save_path, name_path, param_dicts=d)
             # if periodic save, then include epoch
-            if not is_better:
+            if is_periodic:
                 name_path = f"{name_path}_{epoch + 1}"
+                save_model(model, save_path, name_path, param_dicts=d)
 
             save_model(model, save_path, name_path, param_dicts=d)
 
@@ -284,6 +288,7 @@ def test(
         save: bool = True,
         use_edge_weight: bool = True,
         verbose: bool = False,
+        **kwargs,
 ) -> Tuple[Dict, float]:
     """
     Calculates the metric on the test set of the model given in args.
@@ -321,6 +326,10 @@ def test(
     list_all = []
     paths = list(Path(save_path).glob('*'))
     for folder_path in tqdm(paths):
+        # check if not emtpy
+        if not any(folder_path.iterdir()):
+            continue
+
         print_v(f"Testing {folder_path.name}")
 
         # load model and data loader
@@ -395,8 +404,7 @@ def test(
 
         dict_model.update(dict_result)
         if save:
-            save_model(model, str(folder_path.absolute().parent), folder_path.name, param_dicts=dict_model,
-                       save_model=False)
+            save_model(model, str(folder_path.absolute().parent), folder_path.name, param_dicts=dict_model, save_model=False)
 
         list_all.append(dict(
             dict=dict_model,
