@@ -8,7 +8,10 @@ import torch.utils.tensorboard as tb
 from tqdm.auto import tqdm
 
 from .models import load_model, save_model, FNN
-from .utils import ConfusionMatrix, ContagionDataset
+from .utils import ClassConfusionMatrix, ContagionDataset
+
+
+PREFIX_TRAINING_PARAMS = "tr_par_"
 
 
 def train(
@@ -60,7 +63,7 @@ def train(
     # Tensorboard
     global_step = 0
     # dictionary of training parameters
-    dict_param = {f"tr_par_{k}": v for k, v in locals().items() if k in [
+    dict_param = {f"{PREFIX_TRAINING_PARAMS}{k}": v for k, v in locals().items() if k in [
         'lr',
         'optimizer_name',
         'batch_size',
@@ -88,13 +91,13 @@ def train(
 
     # Model
     dict_model.update(dict_param)
-    dict_model.update(dict(
-        # metrics
-        train_loss=None,
-        train_acc=0,
-        val_acc=0,
-        epoch=0,
-    ))
+    # dict_model.update(dict(
+    #     # metrics
+    #     train_loss=None,
+    #     train_acc=0,
+    #     val_acc=0,
+    #     epoch=0,
+    # ))
     model = model.to(device)
 
     # Loss
@@ -129,7 +132,7 @@ def train(
         # print(f"{epoch} of {n_epochs}")
 
         train_loss = []
-        train_cm = ConfusionMatrix(dataset_train.num_classes, name='train')
+        train_cm = ClassConfusionMatrix(dataset_train.num_classes, name='train')
 
         # Start training: train mode
         model.train()
@@ -137,10 +140,11 @@ def train(
             g = g.to(device)
 
             # Get data
-            features = g.ndata['feat'].to(device)
-            labels = g.ndata['label'].to(device)
-            edge_weight = g.edata['weight'].to(device)
-            train_mask = g.ndata['train_mask'].to(device)
+            features = g.ndata['feat']
+            labels = g.ndata['label']
+            percentiles = g.ndata['perc']
+            edge_weight = g.edata['weight']
+            train_mask = g.ndata['train_mask']
 
             # Compute loss on training and update parameters
             logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
@@ -153,13 +157,13 @@ def train(
 
             # Add train loss and accuracy
             train_loss.append(loss_train.cpu().detach().numpy())
-            train_cm.add(logits[train_mask].argmax(1), labels[train_mask])
+            train_cm.add(logits[train_mask].argmax(1), labels[train_mask], true_percentiles=percentiles[train_mask])
 
         # Evaluate the model
         # Can be done in combination with training if drop_edges is 0
         # No performance issue for small graphs so we can separate it
         val_loss = []
-        val_cm = ConfusionMatrix(dataset_train.num_classes, name='val')
+        val_cm = ClassConfusionMatrix(dataset_train.num_classes, name='val')
 
         model.eval()
         with torch.no_grad():
@@ -169,6 +173,7 @@ def train(
                 # Get data
                 features = g.ndata['feat']
                 labels = g.ndata['label']
+                percentiles = g.ndata['perc']
                 edge_weight = g.edata['weight']
                 val_mask = g.ndata['val_mask']
 
@@ -176,23 +181,49 @@ def train(
 
                 # Add loss and accuracy
                 val_loss.append(loss(logits[val_mask], labels[val_mask]).cpu().detach().numpy())
-                val_cm.add(logits[val_mask].argmax(1), labels[val_mask])
+                val_cm.add(logits[val_mask].argmax(1), labels[val_mask], true_percentiles=percentiles[val_mask])
 
         # calculate mean metrics
         train_loss = np.mean(train_loss)
-        train_acc = train_cm.global_accuracy
+        # train_acc = train_cm.global_accuracy
         val_loss = np.mean(val_loss)
-        val_acc = val_cm.global_accuracy
+        # val_acc = val_cm.global_accuracy
 
         # Step the scheduler to change the learning rate
+        is_better = False
         if scheduler_mode == "min_loss":
-            scheduler.step(train_loss)
+            met = train_loss
+            if (best_met := dict_model.get('train_loss', None)) is not None:
+                is_better = met <= best_met
+            else:
+                dict_model['train_loss'] = met
+                is_better = True
         elif scheduler_mode == "max_acc":
-            scheduler.step(train_acc)
+            met = train_cm.global_accuracy
+            if (best_met := dict_model.get('train_acc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['train_acc'] = met
+                is_better = True
         elif scheduler_mode == "max_val_acc":
-            scheduler.step(val_acc)
+            met = val_cm.global_accuracy
+            if (best_met := dict_model.get('val_acc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['val_acc'] = met
+                is_better = True
         elif scheduler_mode == 'max_val_mcc':
-            scheduler.step(val_cm.matthews_corrcoef)
+            met = val_cm.matthews_corrcoef
+            if (best_met := dict_model.get('val_mcc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['val_mcc'] = met
+                is_better = True
+        else:
+            met = None
+
+        if met is not None:
+            scheduler.step(met)
 
         # log metrics
         global_step += 1
@@ -209,24 +240,31 @@ def train(
             train_logger.add_scalar('lr', optimizer.param_groups[0]['lr'], global_step=global_step)
 
         # Save the model
-        if (reg_save := (epoch % steps_save == steps_save - 1)) or (val_acc >= dict_model["val_acc"]):
+        if (is_periodic := epoch % steps_save == steps_save - 1) or is_better:
+            d = dict_model if is_better else dict_model.copy()
+
             # print(f"Best val acc {epoch}: {val_acc}")
-            dict_model["train_loss"] = train_loss
-            dict_model["train_acc"] = train_acc
-            dict_model["val_acc"] = val_acc
-            dict_model["epoch"] = epoch + 1
+            d["epoch"] = epoch + 1
+            # metrics
+            d["train_loss"] = train_loss
+            d["train_acc"] = train_cm.global_accuracy
+            d["val_acc"] = val_cm.global_accuracy
+            d["val_mcc"] = val_cm.matthews_corrcoef
 
             name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
-            name_path = f"{dict_model['val_acc']:.2f}_{name_path}"
-
+            name_path = f"{d['val_acc']:.2f}_{name_path}"
+            
+            if is_better:
+                save_model(model, save_path, name_path, param_dicts=d)
             # if periodic save, then include epoch
-            if reg_save:
+            if is_periodic:
                 name_path = f"{name_path}_{epoch + 1}"
+                save_model(model, save_path, name_path, param_dicts=d)
 
-            save_model(model, save_path, name_path, param_dicts=dict_model)
+            save_model(model, save_path, name_path, param_dicts=d)
 
 
-def log_confussion_matrix(logger, confussion_matrix: ConfusionMatrix, global_step: int, suffix=''):
+def log_confussion_matrix(logger, confussion_matrix: ClassConfusionMatrix, global_step: int, suffix=''):
     """
     Logs the data in the confussion matrix to a logger
     :param logger: tensorboard logger to use for logging
@@ -250,6 +288,7 @@ def test(
         save: bool = True,
         use_edge_weight: bool = True,
         verbose: bool = False,
+        **kwargs,
 ) -> Tuple[Dict, float]:
     """
     Calculates the metric on the test set of the model given in args.
@@ -261,7 +300,8 @@ def test(
     :param use_cpu: whether to use the CPU for training
     :param debug_mode: whether to use debug mode (cpu and 0 workers)
     :param save: whether to save the results in the model dict
-    :param use_edge_weight: If true, it uses edge weights for training when possible
+    :param use_edge_weight: If true, it uses edge weights for training when possible.
+                                    Only used if the model's dictionary does not have this parameter
     :param verbose: whether to print results
 
     :return: returns the best model's dict_model, test accuracy and list of all models with test information
@@ -286,12 +326,19 @@ def test(
     list_all = []
     paths = list(Path(save_path).glob('*'))
     for folder_path in tqdm(paths):
+        # check if not emtpy
+        if not any(folder_path.iterdir()):
+            continue
+
         print_v(f"Testing {folder_path.name}")
 
         # load model and data loader
         del model
         model, dict_model = load_model(folder_path)
         model = model.to(device).eval()
+
+        # training parameters
+        use_edge_weight = dict_model.get(f'{PREFIX_TRAINING_PARAMS}use_edge_weight', use_edge_weight)
 
         # dataset given as parameter
 
@@ -300,9 +347,9 @@ def test(
         val_cm = []
         test_cm = []
         for k in range(n_runs):
-            train_run_cm = ConfusionMatrix(dataset.num_classes, name='train')
-            val_run_cm = ConfusionMatrix(dataset.num_classes, name='val')
-            test_run_cm = ConfusionMatrix(dataset.num_classes, name='test')
+            train_run_cm = ClassConfusionMatrix(dataset.num_classes, name='train')
+            val_run_cm = ClassConfusionMatrix(dataset.num_classes, name='val')
+            test_run_cm = ClassConfusionMatrix(dataset.num_classes, name='test')
 
             with torch.no_grad():
                 for g in dataset:
@@ -310,6 +357,7 @@ def test(
 
                     # Get data
                     features = g.ndata['feat']
+                    percentiles = g.ndata['perc']
                     labels = g.ndata['label']
                     edge_weight = g.edata['weight']
                     train_mask = g.ndata['train_mask']
@@ -318,34 +366,45 @@ def test(
 
                     logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
 
-                    train_run_cm.add(logits[train_mask].argmax(1), labels[train_mask])
-                    val_run_cm.add(logits[val_mask].argmax(1), labels[val_mask])
-                    test_run_cm.add(logits[test_mask].argmax(1), labels[test_mask])
+                    train_run_cm.add(logits[train_mask].argmax(1), labels[train_mask], true_percentiles=percentiles[train_mask])
+                    val_run_cm.add(logits[val_mask].argmax(1), labels[val_mask], true_percentiles=percentiles[val_mask])
+                    test_run_cm.add(logits[test_mask].argmax(1), labels[test_mask], true_percentiles=percentiles[test_mask])
 
             train_cm.append(train_run_cm)
             val_cm.append(val_run_cm)
             test_cm.append(test_run_cm)
 
         dict_result = {
-            "train_mcc": np.mean([k.matthews_corrcoef for k in train_cm]),
-            "val_mcc": np.mean([k.matthews_corrcoef for k in val_cm]),
-            "test_mcc": np.mean([k.matthews_corrcoef for k in test_cm]),
-
             "train_rmse": np.mean([k.rmse for k in train_cm]),
             "val_rmse": np.mean([k.rmse for k in val_cm]),
             "test_rmse": np.mean([k.rmse for k in test_cm]),
 
+            "train_mae": np.mean([k.mae for k in train_cm]),
+            "val_mae": np.mean([k.mae for k in val_cm]),
+            "test_mae": np.mean([k.mae for k in test_cm]),
+
+            "train_mcc": np.mean([k.matthews_corrcoef for k in train_cm]),
+            "val_mcc": np.mean([k.matthews_corrcoef for k in val_cm]),
+            "test_mcc": np.mean([k.matthews_corrcoef for k in test_cm]),
+
             "train_acc": np.mean([k.global_accuracy for k in train_cm]),
             "val_acc": np.mean([k.global_accuracy for k in val_cm]),
             "test_acc": np.mean([k.global_accuracy for k in test_cm]),
+
+            "train_rmse_perc": np.mean([k.rmse_percentiles for k in train_cm]),
+            "val_rmse_perc": np.mean([k.rmse_percentiles for k in val_cm]),
+            "test_rmse_perc": np.mean([k.rmse_percentiles for k in test_cm]),
+
+            "train_mae_perc": np.mean([k.mae_percentiles for k in train_cm]),
+            "val_mae_perc": np.mean([k.mae_percentiles for k in val_cm]),
+            "test_mae_perc": np.mean([k.mae_percentiles for k in test_cm]),
         }
 
         print_v(f"RESULT: {dict_result}")
 
         dict_model.update(dict_result)
         if save:
-            save_model(model, str(folder_path.absolute().parent), folder_path.name, param_dicts=dict_model,
-                       save_model=False)
+            save_model(model, str(folder_path.absolute().parent), folder_path.name, param_dicts=dict_model, save_model=False)
 
         list_all.append(dict(
             dict=dict_model,
@@ -360,6 +419,7 @@ def test(
             best_dict = dict_model
 
     return best_dict, best_acc, list_all
+
 
 # if __name__ == '__main__':
 #     from argparse import ArgumentParser

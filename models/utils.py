@@ -2,7 +2,7 @@ import copy
 import pickle
 import random
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
 
 import dgl
 import matplotlib.pyplot as plt
@@ -197,6 +197,7 @@ class ConfusionMatrix:
     def _make(self, preds: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         """
         Returns the confusion matrix of the given predicted and labels values
+
         :param preds: predicted values (B)
         :param labels: true values (B)
         :return: (size,size) confusion matrix of `size` classes
@@ -209,6 +210,7 @@ class ConfusionMatrix:
     def __init__(self, size=5, name: str = ''):
         """
         This class builds and updates a confusion matrix.
+
         :param size: the number of classes to consider
         :param name: name of the confusion matrix
         """
@@ -218,11 +220,12 @@ class ConfusionMatrix:
         self.name = name
 
     def __repr__(self) -> str:
-        return self.matrix.numpy().__repr__
+        return self.matrix.numpy().__repr__()
 
-    def add(self, preds: torch.Tensor, labels: torch.Tensor) -> None:
+    def add(self, preds: torch.Tensor, labels: torch.Tensor, **kwargs) -> None:
         """
         Updates the confusion matrix using predictions `preds` (e.g. logit.argmax(1)) and ground truth `labels`
+
         :param preds: predicted values (B)
         :param labels: true values (B)
         """
@@ -241,6 +244,10 @@ class ConfusionMatrix:
     def matthews_corrcoef(self):
         """Matthews correlation coefficient (MCC)"""
         return matthews_corrcoef(y_true=self.labels.numpy(), y_pred=self.preds.numpy())
+
+    @property
+    def mae(self):
+        return mean_absolute_error(y_true=self.labels.numpy(), y_pred=self.preds.numpy())
 
     @property
     def rmse(self):
@@ -271,6 +278,7 @@ class ConfusionMatrix:
     def visualize(self, normalize: bool = False):
         """
         Visualize confusion matrix
+
         :param normalize: whether to normalize the matrix by the total amount of samples
         """
         plt.figure(figsize=(15, 10))
@@ -288,10 +296,39 @@ class ConfusionMatrix:
         return plt
 
 
+class ClassConfusionMatrix(ConfusionMatrix):
+    def __init__(self, size=5, name: str = ''):
+        super().__init__(size, name)
+        self.true_percentiles = None
+        self.pred_perc = None
+
+    def add(self, preds: torch.Tensor, labels: torch.Tensor, true_percentiles: torch.Tensor) -> None:
+        super().add(preds, labels)
+
+        true_percentiles = true_percentiles.reshape(-1).cpu().detach().clone()
+        self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles),
+                                          dim=0) if self.true_percentiles is not None else true_percentiles
+
+        # use mean/median as predicted percentile (since it minimizes the MSE/MAE)
+        preds = preds.reshape(-1).cpu().detach().clone()
+        pred_perc = 1 - (preds / self.size + 1 / (2 * self.size))
+        self.pred_perc = torch.cat((self.pred_perc, pred_perc),
+                                          dim=0) if self.pred_perc is not None else pred_perc
+
+    @property
+    def rmse_percentiles(self):
+        return mean_squared_error(y_true=self.true_percentiles, y_pred=self.pred_perc, squared=False)
+
+    @property
+    def mae_percentiles(self):
+        return mean_absolute_error(y_true=self.true_percentiles, y_pred=self.pred_perc)
+
+
 class PercentilesConfusionMatrix(ConfusionMatrix):
     def __init__(self, size=5, name: str = '', base_n: bool = False):
         """
         This class builds and updates a confusion matrix.
+
         :param size: the number of classes to consider
         :param name: name of the confusion matrix
         :param base_n: if true, it will expect to receive predictions in range `[0,self.size]`,
@@ -302,7 +339,7 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
         self.true_percentiles = None
         self.base_n = base_n
 
-    def add(self, preds: torch.Tensor, labels: torch.Tensor, true_percentiles: torch.Tensor = None) -> None:
+    def add(self, preds: torch.Tensor, labels: torch.Tensor, true_percentiles: torch.Tensor) -> None:
         """
         Updates the confusion matrix using the predicted values `predds` and ground truth `labels`.
         0 corresponds to percentile 100
@@ -314,17 +351,16 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
         preds = preds.reshape(-1).cpu().detach().clone()
 
         # save as percentiles
-        if true_percentiles is not None:
-            true_percentiles = true_percentiles.reshape(-1).cpu().detach().clone()
-            # to get pseudo-percentiles in [0,1] and with 0 being the lowest and 1 the highest
-            if self.base_n:
-                pseudo_perc = 1 - (preds / self.size)
-            else:
-                pseudo_perc = 1 - (preds / (self.size - 1))
-            self.pseudo_perc = torch.cat((self.pseudo_perc, pseudo_perc),
-                                         dim=0) if self.pseudo_perc is not None else pseudo_perc
-            self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles),
-                                              dim=0) if self.true_percentiles is not None else true_percentiles
+        true_percentiles = true_percentiles.reshape(-1).cpu().detach().clone()
+        # pseudo-percentiles in [0,1] (0 being the lowest and 1 the highest) to percentiles [0,1]
+        if self.base_n:
+            pseudo_perc = 1 - (preds / self.size)
+        else:
+            pseudo_perc = 1 - (preds / (self.size - 1))
+        self.pseudo_perc = torch.cat((self.pseudo_perc, pseudo_perc),
+                                     dim=0) if self.pseudo_perc is not None else pseudo_perc
+        self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles),
+                                          dim=0) if self.true_percentiles is not None else true_percentiles
 
         # CONVERT TO LABELS
 
@@ -354,9 +390,31 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
         return mean_absolute_error(y_true=self.true_percentiles, y_pred=self.pseudo_perc)
 
 
+def save_pickle(obj, path: Union[str, Path]):
+    """
+    Saves an object with pickle
+
+    :param obj: object to be saved
+    :param save_path: path to the file where it will be saved
+    """
+    with open(path, 'wb') as f:
+        pickle.dump(obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def load_pickle(path: Union[str, Path]):
+    """
+    Loads an object with pickle from a file
+
+    :param path: path to the file where the object is stored
+    """
+    with open(path, 'rb') as f:
+        return pickle.load(f)
+
+
 def save_dict(d: Dict, path: str, as_str: bool = False) -> None:
     """
     Saves a dictionary to a file in plain text
+
     :param d: dictionary to save
     :param path: path of the file where the dictionary will be saved
     :param as_str: If true, it will save as a string. If false, it will use pickle
@@ -365,23 +423,21 @@ def save_dict(d: Dict, path: str, as_str: bool = False) -> None:
         with open(path, 'w', encoding="utf-8") as file:
             file.write(str(d))
     else:
-        with open(path, 'wb') as file:
-            pickle.dump(d, file)
+        save_pickle(d, path)
 
 
 def load_dict(path: str) -> Dict:
     """
     Loads a dictionary from a file (plain text or pickle)
-    :param path: path where the dictionary was saved
 
+    :param path: path where the dictionary was saved
     :return: the loaded dictionary
     """
-    with open(path, 'rb') as file:
-        try:
-            return pickle.load(file)
-        except pickle.UnpicklingError as e:
-            # print(e)
-            pass
+    try:
+        return load_pickle(path)
+    except pickle.UnpicklingError as e:
+        # print(e)
+        pass
 
     with open(path, 'r', encoding="utf-8") as file:
         from ast import literal_eval
@@ -421,6 +477,7 @@ def set_seed(seed: int) -> None:
 def load_list(path: str) -> List:
     """
     Loads a list from a file in plain text
+
     :param path: path where the list was saved
     :return: the loaded list
     """

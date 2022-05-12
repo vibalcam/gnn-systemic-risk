@@ -11,6 +11,9 @@ from .models import load_model, save_model
 from .utils import PercentilesConfusionMatrix, ContagionDataset
 
 
+PREFIX_TRAINING_PARAMS = "tr_par_"
+
+
 def train(
         model: torch.nn.Module,
         dict_model: Dict,
@@ -28,7 +31,7 @@ def train(
         device=None,
         use_edge_weight: bool = True,
         loss_type: str = 'mse',
-        base_n: bool = False,
+        approach: str = 'scale-dist',
         scheduler_patience: int = 10,
 ):
     """
@@ -50,8 +53,7 @@ def train(
     :param steps_save: number of epoch after which to validate and save model (if conditions met)
     :param use_edge_weight: If true, it uses edge weights for training when possible
     :param loss_type: regression loss to use. Can be `mse, mae`
-    :param base_n: if true, class `num_classes-1` will be considered pseudo-percentile `(num_classes-1)/num_classes`
-                    otherwise, class `num_classes-1` will be considered pseudo-percentile `1`
+    :param approach: the approach to convert the pseudo percentiles into labels. It can be `base_n, scale, scale-dist`
     :param scheduler_patience: value used as patience for the learning rate scheduler
     """
 
@@ -60,16 +62,23 @@ def train(
         device = torch.device('cuda' if torch.cuda.is_available() and not (use_cpu or debug_mode) else 'cpu')
     # print(device)
 
+    # Get approach for perc to labels
+    if approach not in ['base_n', 'scale', 'scale-dist']:
+        raise Exception(f"Unknown approach {approach}")
+    base_n = approach == 'base_n'
+    scale_dist = get_mid_range_target if approach == 'scale-dist' else lambda x,n: x
+
     # Tensorboard
     global_step = 0
     # dictionary of training parameters
-    dict_param = {f"tr_par_{k}": v for k, v in locals().items() if k in [
+    dict_param = {f"{PREFIX_TRAINING_PARAMS}{k}": v for k, v in locals().items() if k in [
         'lr',
         'optimizer_name',
         'batch_size',
         'scheduler_mode',
         'loss_type',
         'use_edge_weight',
+        'approach',
         'scheduler_patience',
     ]}
     dict_param.update(dict(
@@ -89,13 +98,13 @@ def train(
 
     # Model
     dict_model.update(dict_param)
-    dict_model.update(dict(
-        # metrics
-        train_loss=None,
-        train_acc=0,
-        val_acc=0,
-        epoch=0,
-    ))
+    # dict_model.update(dict(
+    #     # metrics
+    #     train_loss=None,
+    #     train_acc=0,
+    #     val_acc=0,
+    #     epoch=0,
+    # ))
     model = model.to(device)
 
     # Loss
@@ -150,7 +159,7 @@ def train(
             # Compute loss on training and update parameters
             out = model(g, features, edge_weight=edge_weight if use_edge_weight else None)[:, 0]
             out = sigmoid_scale(out, dataset_train.num_classes, base_n=base_n)
-            loss_train = loss(out[train_mask], labels[train_mask])
+            loss_train = loss(out[train_mask], scale_dist(labels[train_mask], dataset_train.num_classes))
 
             # Do back propagation
             if torch.isnan(loss_train):
@@ -192,29 +201,79 @@ def train(
                 out = sigmoid_scale(out, dataset_train.num_classes, base_n=base_n)
 
                 # Add loss and accuracy
-                val_loss.append(loss(out[val_mask], labels[val_mask]).cpu().detach().numpy())
+                val_loss.append(loss(out[val_mask], scale_dist(labels[val_mask], dataset_train.num_classes)).cpu().detach().numpy())
                 val_cm.add(out[val_mask], labels[val_mask], true_percentiles=percentiles[val_mask])
                 # test_cm.add(out[test_mask], target[test_mask])
 
         # calculate mean metrics
         train_loss = np.mean(train_loss)
-        train_acc = train_cm.global_accuracy
+        # train_acc = train_cm.global_accuracy
         val_loss = np.mean(val_loss)
-        val_acc = val_cm.global_accuracy
+        # val_acc = val_cm.global_accuracy
 
         # Step the scheduler to change the learning rate
+        is_better = False
         if scheduler_mode == "min_loss":
-            scheduler.step(train_loss)
+            met = train_loss
+            if (best_met := dict_model.get('train_loss', None)) is not None:
+                is_better = met <= best_met
+            else:
+                dict_model['train_loss'] = met
+                is_better = True
         elif scheduler_mode == "min_val_loss":
-            scheduler.step(val_loss)
+            met = val_loss
+            if (best_met := dict_model.get('val_loss', None)) is not None:
+                is_better = met <= best_met
+            else:
+                dict_model['val_loss'] = met
+                is_better = True
         elif scheduler_mode == "max_acc":
-            scheduler.step(train_acc)
+            met = train_cm.global_accuracy
+            if (best_met := dict_model.get('train_acc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['train_acc'] = met
+                is_better = True
         elif scheduler_mode == "max_val_acc":
-            scheduler.step(val_acc)
+            met = val_cm.global_accuracy
+            if (best_met := dict_model.get('val_acc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['val_acc'] = met
+                is_better = True
         elif scheduler_mode == 'max_val_mcc':
-            scheduler.step(val_cm.matthews_corrcoef)
-        elif scheduler_mode == 'min_val_rmse_perc':
-            scheduler.step(val_cm.rmse_percentiles)
+            met = val_cm.matthews_corrcoef
+            if (best_met := dict_model.get('val_mcc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['val_mcc'] = met
+                is_better = True
+        elif scheduler_mode == "min_val_rmse_perc":
+            met = val_cm.rmse_percentiles
+            if (best_met := dict_model.get('val_rmse_perc', None)) is not None:
+                is_better = met <= best_met
+            else:
+                dict_model['val_rmse_perc'] = met
+                is_better = True
+        else:
+            met = None
+
+        if met is not None:
+            scheduler.step(met)
+
+        # # Step the scheduler to change the learning rate
+        # if scheduler_mode == "min_loss":
+        #     scheduler.step(train_loss)
+        # elif scheduler_mode == "min_val_loss":
+        #     scheduler.step(val_loss)
+        # elif scheduler_mode == "max_acc":
+        #     scheduler.step(train_acc)
+        # elif scheduler_mode == "max_val_acc":
+        #     scheduler.step(val_acc)
+        # elif scheduler_mode == 'max_val_mcc':
+        #     scheduler.step(val_cm.matthews_corrcoef)
+        # elif scheduler_mode == 'min_val_rmse_perc':
+        #     scheduler.step(val_cm.rmse_percentiles)
 
         # log metrics
         global_step += 1
@@ -231,18 +290,44 @@ def train(
             train_logger.add_scalar('lr', optimizer.param_groups[0]['lr'], global_step=global_step)
 
         # Save the model
-        if (reg_save := (epoch % steps_save == steps_save - 1)) or (val_acc >= dict_model["val_acc"]):
+        if (is_periodic := epoch % steps_save == steps_save - 1) or is_better:
+            d = dict_model if is_better else dict_model.copy()
+
             # print(f"Best val acc {epoch}: {val_acc}")
-            dict_model["train_loss"] = train_loss
-            dict_model["train_acc"] = train_acc
-            dict_model["val_acc"] = val_acc
-            dict_model["epoch"] = epoch + 1
+            d["epoch"] = epoch + 1
+            # metrics
+            d["train_loss"] = train_loss
+            d["val_loss"] = val_loss
+            d["train_acc"] = train_cm.global_accuracy
+            d["val_acc"] = val_cm.global_accuracy
+            d["val_mcc"] = val_cm.matthews_corrcoef
+            d["val_rmse_perc"] = val_cm.rmse_percentiles
 
             name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
+            name_path = f"{d['val_acc']:.2f}_{name_path}"
+            
+            if is_better:
+                save_model(model, save_path, name_path, param_dicts=d)
             # if periodic save, then include epoch
-            if reg_save:
+            if is_periodic:
                 name_path = f"{name_path}_{epoch + 1}"
-            save_model(model, save_path, name_path, param_dicts=dict_model)
+                save_model(model, save_path, name_path, param_dicts=d)
+
+
+
+        # # Save the model
+        # if (reg_save := (epoch % steps_save == steps_save - 1)) or (val_acc >= dict_model["val_acc"]):
+        #     # print(f"Best val acc {epoch}: {val_acc}")
+        #     dict_model["train_loss"] = train_loss
+        #     dict_model["train_acc"] = train_acc
+        #     dict_model["val_acc"] = val_acc
+        #     dict_model["epoch"] = epoch + 1
+
+        #     name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
+        #     # if periodic save, then include epoch
+        #     if reg_save:
+        #         name_path = f"{name_path}_{epoch + 1}"
+        #     save_model(model, save_path, name_path, param_dicts=dict_model)
 
 
 def sigmoid_scale(x: torch.Tensor, n_classes: int, base_n: bool = False):
@@ -257,14 +342,14 @@ def sigmoid_scale(x: torch.Tensor, n_classes: int, base_n: bool = False):
     return x
 
 
-# def get_mid_range_target(labels: torch.Tensor, n_classes:int):
-#     # get intermediate values
-#     mid = (2*labels+1)*(n_classes-1)/(2*n_classes)
-#     # for 0 and n-1 classes, keep labels
-#     not_intermediate = torch.logical_or(labels == 0, labels == (n_classes-1))
-#     mid[not_intermediate] = labels[not_intermediate]
+def get_mid_range_target(labels: torch.Tensor, n_classes:int):
+    # get intermediate values
+    mid = (2*labels+1)*(n_classes-1)/(2*n_classes)
+    # for 0 and n-1 classes, keep labels
+    not_intermediate = torch.logical_or(labels == 0, labels == (n_classes-1))
+    mid[not_intermediate] = labels[not_intermediate]
 
-#     return mid
+    return mid
 
 
 def log_confussion_matrix(logger, confussion_matrix: PercentilesConfusionMatrix, global_step: int, suffix=''):
@@ -290,8 +375,9 @@ def test(
         use_cpu: bool = False,
         save: bool = True,
         use_edge_weight: bool = True,
-        base_n: bool = False,
+        approach_default: str = 'scale-dist',
         verbose: bool = False,
+        **kwargs,
 ) -> Tuple[Dict, float]:
     """
     Calculates the metric on the test set of the model given in args.
@@ -303,9 +389,11 @@ def test(
     :param use_cpu: whether to use the CPU for training
     :param debug_mode: whether to use debug mode (cpu and 0 workers)
     :param save: whether to save the results in the model dict
-    :param use_edge_weight: If true, it uses edge weights for training when possible
-    :param base_n: if true, class `num_classes-1` will be considered pseudo-percentile `(num_classes-1)/num_classes`
-                    otherwise, class `num_classes-1` will be considered pseudo-percentile `1`
+    :param use_edge_weight: If true, it uses edge weights for training when possible.
+                                    Only used if the model's dictionary does not have this parameter
+    :param approach_default: the approach to convert the pseudo percentiles into labels.
+                            It can be `base_n, scale, scale-dist`.
+                            Only used if the model's dictionary does not have this parameter
     :param verbose: whether to print results
 
     :return: returns the best model's dict_model, test accuracy and list of all models with test information
@@ -331,12 +419,25 @@ def test(
     paths = list(Path(save_path).glob('*'))
 
     for folder_path in tqdm(paths):
+        # check if not emtpy
+        if not any(folder_path.iterdir()):
+            continue
+        
         print_v(f"Testing {folder_path.name}")
 
         # load model and data loader
         del model
         model, dict_model = load_model(folder_path)
         model = model.to(device).eval()
+
+        # training parameters
+        use_edge_weight = dict_model.get(f'{PREFIX_TRAINING_PARAMS}use_edge_weight', use_edge_weight)
+        approach = dict_model.get(f'{PREFIX_TRAINING_PARAMS}approach', approach_default)
+
+        # Get approach for perc to labels
+        if approach not in ['base_n', 'scale', 'scale-dist']:
+            raise Exception(f"Unknown approach {approach}")
+        base_n = approach == 'base_n'
 
         # dataset as parameter
 
@@ -382,13 +483,9 @@ def test(
                 "val_rmse": np.mean([k.rmse for k in val_cm]),
                 "test_rmse": np.mean([k.rmse for k in test_cm]),
 
-                "train_rmse_perc": np.mean([k.rmse_percentiles for k in train_cm]),
-                "val_rmse_perc": np.mean([k.rmse_percentiles for k in val_cm]),
-                "test_rmse_perc": np.mean([k.rmse_percentiles for k in test_cm]),
-
-                "train_mae_perc": np.mean([k.mae_percentiles for k in train_cm]),
-                "val_mae_perc": np.mean([k.mae_percentiles for k in val_cm]),
-                "test_mae_perc": np.mean([k.mae_percentiles for k in test_cm]),
+                "train_mae": np.mean([k.mae for k in train_cm]),
+                "val_mae": np.mean([k.mae for k in val_cm]),
+                "test_mae": np.mean([k.mae for k in test_cm]),
 
                 "train_mcc": np.mean([k.matthews_corrcoef for k in train_cm]),
                 "val_mcc": np.mean([k.matthews_corrcoef for k in val_cm]),
@@ -397,6 +494,14 @@ def test(
                 "train_acc": np.mean([k.global_accuracy for k in train_cm]),
                 "val_acc": np.mean([k.global_accuracy for k in val_cm]),
                 "test_acc": np.mean([k.global_accuracy for k in test_cm]),
+
+                "train_rmse_perc": np.mean([k.rmse_percentiles for k in train_cm]),
+                "val_rmse_perc": np.mean([k.rmse_percentiles for k in val_cm]),
+                "test_rmse_perc": np.mean([k.rmse_percentiles for k in test_cm]),
+
+                "train_mae_perc": np.mean([k.mae_percentiles for k in train_cm]),
+                "val_mae_perc": np.mean([k.mae_percentiles for k in val_cm]),
+                "test_mae_perc": np.mean([k.mae_percentiles for k in test_cm]),
             }
 
             print_v(f"RESULT: {dict_result}")
