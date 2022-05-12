@@ -60,7 +60,9 @@ class ResultCollection:
             Saves the best model with a given name
 
             :param metric: metric for sorting
+            :param folder: folder where the model will be saved
             :param maximize: whether to return the max first
+            :param filename: filename of the model to be saved
             :return: the best sample
             """
             if filename is None:
