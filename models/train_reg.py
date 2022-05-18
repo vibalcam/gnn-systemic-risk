@@ -53,7 +53,7 @@ def train(
     :param steps_save: number of epoch after which to validate and save model (if conditions met)
     :param use_edge_weight: If true, it uses edge weights for training when possible
     :param loss_type: regression loss to use. Can be `mse, mae`
-    :param approach: the approach to convert the pseudo percentiles into labels. It can be `base_n, scale, scale-dist`
+    :param approach: approach used to convert pseudo percentiles into labels. It can be `base_n, scale, scale-dist`
     :param scheduler_patience: value used as patience for the learning rate scheduler
     """
 
