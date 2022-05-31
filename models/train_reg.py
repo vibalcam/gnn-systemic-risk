@@ -13,6 +13,16 @@ from .utils import PercentilesConfusionMatrix, ContagionDataset
 
 PREFIX_TRAINING_PARAMS = "tr_par_"
 
+APPROACH_TARGET = {
+    'base_n': lambda labels, n_classes: labels / n_classes,
+    'scale': lambda labels, n_classes: labels / (n_classes-1),
+    'dist': lambda labels, n_classes: (2 * labels + 1) / (2 * n_classes),
+}
+
+def sigmoid_scale(x: torch.Tensor) -> torch.Tensor:
+    # sigmoid [0,1]
+    return torch.sigmoid(x / 5)
+
 
 def train(
         model: torch.nn.Module,
@@ -31,7 +41,7 @@ def train(
         device=None,
         use_edge_weight: bool = True,
         loss_type: str = 'mse',
-        approach: str = 'scale-dist',
+        approach: str = 'dist',
         scheduler_patience: int = 10,
 ):
     """
@@ -53,7 +63,7 @@ def train(
     :param steps_save: number of epoch after which to validate and save model (if conditions met)
     :param use_edge_weight: If true, it uses edge weights for training when possible
     :param loss_type: regression loss to use. Can be `mse, mae`
-    :param approach: approach used to convert pseudo percentiles into labels. It can be `base_n, scale, scale-dist`
+    :param approach: approach used to convert pseudo percentiles into labels. It can be `base_n, scale, dist`
     :param scheduler_patience: value used as patience for the learning rate scheduler
     """
 
@@ -63,10 +73,11 @@ def train(
     # print(device)
 
     # Get approach for perc to labels
-    if approach not in ['base_n', 'scale', 'scale-dist']:
-        raise Exception(f"Unknown approach {approach}")
-    base_n = approach == 'base_n'
-    scale_dist = get_mid_range_target if approach == 'scale-dist' else lambda x,n: x
+    get_label = APPROACH_TARGET[approach]
+    # if approach not in ['base_n', 'scale', 'dist']:
+    #     raise Exception(f"Unknown approach {approach}")
+    # base_n = approach == 'base_n'
+    # scale_dist = get_mid_range_target if approach == 'dist' else lambda x,n: x
 
     # Tensorboard
     global_step = 0
@@ -142,7 +153,7 @@ def train(
         # print(f"{epoch} of {n_epochs}")
 
         train_loss = []
-        train_cm = PercentilesConfusionMatrix(dataset_train.num_classes, name='train', base_n=base_n)
+        train_cm = PercentilesConfusionMatrix(dataset_train.num_classes, name='train')
 
         # Start training: train mode
         model.train()
@@ -158,8 +169,8 @@ def train(
 
             # Compute loss on training and update parameters
             out = model(g, features, edge_weight=edge_weight if use_edge_weight else None)[:, 0]
-            out = sigmoid_scale(out, dataset_train.num_classes, base_n=base_n)
-            loss_train = loss(out[train_mask], scale_dist(labels[train_mask], dataset_train.num_classes))
+            out = sigmoid_scale(out)
+            loss_train = loss(out[train_mask], get_label(labels[train_mask], dataset_train.num_classes))
 
             # Do back propagation
             if torch.isnan(loss_train):
@@ -182,7 +193,7 @@ def train(
         # Can be done in combination with training if drop_edges is 0
         # No performance issue for small graphs so we can separate it
         val_loss = []
-        val_cm = PercentilesConfusionMatrix(dataset_train.num_classes, name='val', base_n=base_n)
+        val_cm = PercentilesConfusionMatrix(dataset_train.num_classes, name='val')
 
         model.eval()
         with torch.no_grad():
@@ -198,10 +209,10 @@ def train(
 
                 # pass output through sigmoid for percentiles in range [0,1]
                 out = model(g, features, edge_weight=edge_weight if use_edge_weight else None)[:, 0]
-                out = sigmoid_scale(out, dataset_train.num_classes, base_n=base_n)
+                out = sigmoid_scale(out)
 
                 # Add loss and accuracy
-                val_loss.append(loss(out[val_mask], scale_dist(labels[val_mask], dataset_train.num_classes)).cpu().detach().numpy())
+                val_loss.append(loss(out[val_mask], get_label(labels[val_mask], dataset_train.num_classes)).cpu().detach().numpy())
                 val_cm.add(out[val_mask], labels[val_mask], true_percentiles=percentiles[val_mask])
                 # test_cm.add(out[test_mask], target[test_mask])
 
@@ -261,20 +272,6 @@ def train(
         if met is not None:
             scheduler.step(met)
 
-        # # Step the scheduler to change the learning rate
-        # if scheduler_mode == "min_loss":
-        #     scheduler.step(train_loss)
-        # elif scheduler_mode == "min_val_loss":
-        #     scheduler.step(val_loss)
-        # elif scheduler_mode == "max_acc":
-        #     scheduler.step(train_acc)
-        # elif scheduler_mode == "max_val_acc":
-        #     scheduler.step(val_acc)
-        # elif scheduler_mode == 'max_val_mcc':
-        #     scheduler.step(val_cm.matthews_corrcoef)
-        # elif scheduler_mode == 'min_val_rmse_perc':
-        #     scheduler.step(val_cm.rmse_percentiles)
-
         # log metrics
         global_step += 1
         if train_logger is not None:
@@ -314,44 +311,6 @@ def train(
                 save_model(model, save_path, name_path, param_dicts=d)
 
 
-
-        # # Save the model
-        # if (reg_save := (epoch % steps_save == steps_save - 1)) or (val_acc >= dict_model["val_acc"]):
-        #     # print(f"Best val acc {epoch}: {val_acc}")
-        #     dict_model["train_loss"] = train_loss
-        #     dict_model["train_acc"] = train_acc
-        #     dict_model["val_acc"] = val_acc
-        #     dict_model["epoch"] = epoch + 1
-
-        #     name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
-        #     # if periodic save, then include epoch
-        #     if reg_save:
-        #         name_path = f"{name_path}_{epoch + 1}"
-        #     save_model(model, save_path, name_path, param_dicts=dict_model)
-
-
-def sigmoid_scale(x: torch.Tensor, n_classes: int, base_n: bool = False):
-    # sigmoid [0,1]
-    x = torch.sigmoid(x / 5)
-    if base_n:
-        # scale [0, n_classes]
-        x = x * n_classes
-    else:
-        # scale [0,n_classes-1]
-        x = x * (n_classes - 1)
-    return x
-
-
-def get_mid_range_target(labels: torch.Tensor, n_classes:int):
-    # get intermediate values
-    mid = (2*labels+1)*(n_classes-1)/(2*n_classes)
-    # for 0 and n-1 classes, keep labels
-    not_intermediate = torch.logical_or(labels == 0, labels == (n_classes-1))
-    mid[not_intermediate] = labels[not_intermediate]
-
-    return mid
-
-
 def log_confussion_matrix(logger, confussion_matrix: PercentilesConfusionMatrix, global_step: int, suffix=''):
     """
     Logs the data in the confussion matrix to a logger
@@ -375,7 +334,7 @@ def test(
         use_cpu: bool = False,
         save: bool = True,
         use_edge_weight: bool = True,
-        approach_default: str = 'scale-dist',
+        approach_default: str = 'dist',
         verbose: bool = False,
         **kwargs,
 ) -> Tuple[Dict, float]:
@@ -392,7 +351,7 @@ def test(
     :param use_edge_weight: If true, it uses edge weights for training when possible.
                                     Only used if the model's dictionary does not have this parameter
     :param approach_default: the approach to convert the pseudo percentiles into labels.
-                            It can be `base_n, scale, scale-dist`.
+                            It can be `base_n, scale, dist`.
                             Only used if the model's dictionary does not have this parameter
     :param verbose: whether to print results
 
@@ -435,9 +394,9 @@ def test(
         approach = dict_model.get(f'{PREFIX_TRAINING_PARAMS}approach', approach_default)
 
         # Get approach for perc to labels
-        if approach not in ['base_n', 'scale', 'scale-dist']:
-            raise Exception(f"Unknown approach {approach}")
-        base_n = approach == 'base_n'
+        # if approach not in ['base_n', 'scale', 'dist']:
+        #     raise Exception(f"Unknown approach {approach}")
+        # base_n = approach == 'base_n'
 
         # dataset as parameter
 
@@ -447,9 +406,9 @@ def test(
         test_cm = []
 
         for k in range(n_runs):
-            train_run_cm = PercentilesConfusionMatrix(dataset.num_classes, name='train', base_n=base_n)
-            val_run_cm = PercentilesConfusionMatrix(dataset.num_classes, name='val', base_n=base_n)
-            test_run_cm = PercentilesConfusionMatrix(dataset.num_classes, name='test', base_n=base_n)
+            train_run_cm = PercentilesConfusionMatrix(dataset.num_classes, name='train')
+            val_run_cm = PercentilesConfusionMatrix(dataset.num_classes, name='val')
+            test_run_cm = PercentilesConfusionMatrix(dataset.num_classes, name='test')
 
             with torch.no_grad():
                 for g in dataset:
@@ -467,7 +426,7 @@ def test(
 
                     # pass output through sigmoid for percentiles in range [0,1]
                     out = model(g, features, edge_weight=edge_weight if use_edge_weight else None)[:, 0]
-                    out = sigmoid_scale(out, dataset.num_classes, base_n=base_n)
+                    out = sigmoid_scale(out)
 
                     train_run_cm.add(out[train_mask], labels[train_mask], true_percentiles=percentiles[train_mask])
                     val_run_cm.add(out[val_mask], labels[val_mask], true_percentiles=percentiles[val_mask])
@@ -529,6 +488,7 @@ def test(
             raise e
 
     return best_dict, best_acc, list_all
+
 
 # if __name__ == '__main__':
 #     from argparse import ArgumentParser

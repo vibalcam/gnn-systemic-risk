@@ -124,7 +124,7 @@ class ContagionDataset(dgl.data.DGLDataset):
         is_quant = pd.DataFrame(data=target_np, index=is_quant.index, columns=['label'])
         nx.set_node_attributes(graph, is_quant.to_dict('index'))
 
-        # add percentiles
+        # add percentiles [0,1]
         percentiles = pd.qcut(nodes[self.target_col], 100, labels=False) / 100
         percentiles = pd.DataFrame(data=percentiles.to_numpy().astype(float), index=percentiles.index, columns=['perc'])
         nx.set_node_attributes(graph, percentiles.to_dict('index'))
@@ -172,19 +172,6 @@ class ContagionDataset(dgl.data.DGLDataset):
             k = k.remove_self_loop().add_self_loop()
 
         return k
-
-
-def percentiles_to_labels(x: torch.Tensor, n_classes: int) -> torch.Tensor:
-    """
-    Converts the percentiles to labels such that, for `k integer in [0,n-1]`, percentiles in range `[k/n, (k+1)/n)` will be labeled as k
-
-    :param x: percentiles
-    :param n_classes: number of classes
-
-    :return: the converted labels
-    """
-    labels = torch.clamp((x * n_classes - 1e-6).int(), min=0, max=n_classes - 1)
-    return labels.float()
 
 
 class ConfusionMatrix:
@@ -309,7 +296,7 @@ class ClassConfusionMatrix(ConfusionMatrix):
         self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles),
                                           dim=0) if self.true_percentiles is not None else true_percentiles
 
-        # use mean/median as predicted percentile (since it minimizes the MSE/MAE)
+        # use mean/median (the middle value since uniform distribution) as predicted percentile, since it minimizes the MSE/MAE
         preds = preds.reshape(-1).cpu().detach().clone()
         pred_perc = 1 - (preds / self.size + 1 / (2 * self.size))
         self.pred_perc = torch.cat((self.pred_perc, pred_perc),
@@ -325,7 +312,7 @@ class ClassConfusionMatrix(ConfusionMatrix):
 
 
 class PercentilesConfusionMatrix(ConfusionMatrix):
-    def __init__(self, size=5, name: str = '', base_n: bool = False):
+    def __init__(self, size=5, name: str = ''):
         """
         This class builds and updates a confusion matrix.
 
@@ -337,7 +324,6 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
         super().__init__(size, name)
         self.pseudo_perc = None
         self.true_percentiles = None
-        self.base_n = base_n
 
     def add(self, preds: torch.Tensor, labels: torch.Tensor, true_percentiles: torch.Tensor) -> None:
         """
@@ -352,34 +338,14 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
 
         # save as percentiles
         true_percentiles = true_percentiles.reshape(-1).cpu().detach().clone()
+        self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles), dim=0) if self.true_percentiles is not None else true_percentiles
         # pseudo-percentiles in [0,1] (0 being the lowest and 1 the highest) to percentiles [0,1]
-        if self.base_n:
-            pseudo_perc = 1 - (preds / self.size)
-        else:
-            pseudo_perc = 1 - (preds / (self.size - 1))
-        self.pseudo_perc = torch.cat((self.pseudo_perc, pseudo_perc),
-                                     dim=0) if self.pseudo_perc is not None else pseudo_perc
-        self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles),
-                                          dim=0) if self.true_percentiles is not None else true_percentiles
+        pseudo_perc = 1 - preds
+        self.pseudo_perc = torch.cat((self.pseudo_perc, pseudo_perc), dim=0) if self.pseudo_perc is not None else pseudo_perc
 
         # CONVERT TO LABELS
-
-        if self.base_n:
-            pred_lab = torch.clamp(torch.floor(preds), min=0, max=self.size - 1)
-        else:
-            # create matrix [B, self.size]
-            x = preds[:, None].repeat(1, self.size)
-            # create matrix [1, self.size] with limits of each label in [0, self.size-1]
-            lim = (torch.arange(0, self.size - 1, (self.size - 1) / self.size, dtype=torch.float))[None]
-            # substract one and another to get distance to limit of class
-            dist = (x - lim)
-            # value belongs to class if distance is 0 <= d < (self.size-1)/self.size -> [close left, open right)
-            tmp = torch.logical_and(dist < (self.size - 1) / self.size, dist >= 0).int()
-            pred_lab = tmp.argmax(1)
-            # special case of value self.size-1 when pred_label is exactly self.size-1
-            pred_lab[tmp.sum(1) == 0] = self.size - 1
-
-        super().add(pred_lab, labels)
+        pred_labels = torch.clamp(torch.floor(preds * self.size), min=0, max=self.size - 1)
+        super().add(pred_labels, labels)
 
     @property
     def rmse_percentiles(self):
