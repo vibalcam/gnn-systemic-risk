@@ -284,11 +284,11 @@ FOLDER_PATH_KEY = 'path_name'
 
 
 def save_model(
-    model: torch.nn.Module,
-    folder: Union[pathlib.Path,str],
-    model_name: str,
-    param_dicts: Dict = None,
-    save_model: bool = True
+        model: torch.nn.Module,
+        folder: Union[pathlib.Path, str],
+        model_name: str,
+        param_dicts: Dict = None,
+        save_model: bool = True
 ) -> None:
     """
     Saves the model so it can be loaded after
@@ -310,7 +310,7 @@ def save_model(
     # save dict
     if param_dicts is None:
         param_dicts = {}
-    
+
     # get class of the model
     model_class = None
     for k, v in MODEL_CLASS.items():

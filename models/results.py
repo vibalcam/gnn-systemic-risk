@@ -1,32 +1,30 @@
 from pathlib import Path
 from typing import List, Dict
-from unittest import result
 
 import numpy as np
 import pandas as pd
 
 from models.models import load_model, save_model
-import itertools
 
 
 class ResultCollection:
     class Result:
         # list of metrics to be filtered
-        METRIC_PREFIX = [j+i for i in [
-                "mcc",
-                "acc",
-                "rmse",
-                "mae",
-                "rmse_perc",
-                "mae_perc",
-            ] for j in [
-                'train_', 
-                'val_', 
-                'test_',
-            ]
-        ]
+        METRIC_PREFIX = [j + i for i in [
+            "mcc",
+            "acc",
+            "rmse",
+            "mae",
+            "rmse_perc",
+            "mae_perc",
+        ] for j in [
+                             'train_',
+                             'val_',
+                             'test_',
+                         ]
+                         ]
 
-        def __init__(self, data: List[Dict],  uid:str, group: str = None, **kwargs):
+        def __init__(self, data: List[Dict], uid: str, group: str = None, **kwargs):
             """
             Object used to present the results from the testing
 
@@ -35,7 +33,7 @@ class ResultCollection:
             :param str group: group to which the data belongs, defaults to None
             :param kwargs: any other info to attach to the data
             """
-            self.uid = uid 
+            self.uid = uid
             self.data = data
             self.group = group if group is not None else uid
             self.other = kwargs
@@ -55,7 +53,7 @@ class ResultCollection:
                 sort_idx = sort_idx[::-1]
             return [self.data[k] for k in sort_idx]
 
-        def save_best(self, metric: str,folder: str, maximize: bool = True, filename: str = None):
+        def save_best(self, metric: str, folder: str, maximize: bool = True, filename: str = None):
             """
             Saves the best model with a given name
 
@@ -79,8 +77,8 @@ class ResultCollection:
             """
             Returns a DataFrame of the data
             """
-            return pd.DataFrame(data=[k['dict'] for k in self.data])\
-                .assign(group=self.group, uid=self.uid, **self.other)    
+            return pd.DataFrame(data=[k['dict'] for k in self.data]) \
+                .assign(group=self.group, uid=self.uid, **self.other)
 
         @property
         def df_metrics(self) -> pd.DataFrame:
@@ -129,8 +127,7 @@ class ResultCollection:
         data = [k.df_metrics_sort(metric=metric, maximize=maximize).head(1) for k in self.results.values()]
         df = pd.concat(data)
         df.set_index('uid', inplace=True)
-        return df.sort_values(axis=0, by=['group',metric], ascending=not maximize, na_position='last')
-
+        return df.sort_values(axis=0, by=['group', metric], ascending=not maximize, na_position='last')
 
 # def pretty(ld, indent=0):
 #     return None

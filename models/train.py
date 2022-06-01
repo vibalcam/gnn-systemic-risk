@@ -1,4 +1,3 @@
-import itertools
 from os import path
 from typing import Dict, Tuple, Optional
 
@@ -7,9 +6,8 @@ import torch
 import torch.utils.tensorboard as tb
 from tqdm.auto import tqdm
 
-from .models import load_model, save_model, FNN
+from .models import load_model, save_model
 from .utils import ClassConfusionMatrix, ContagionDataset
-
 
 PREFIX_TRAINING_PARAMS = "tr_par_"
 
@@ -253,7 +251,7 @@ def train(
 
             name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
             name_path = f"{d['val_acc']:.2f}_{name_path}"
-            
+
             if is_better:
                 save_model(model, save_path, name_path, param_dicts=d)
             # if periodic save, then include epoch
@@ -366,9 +364,11 @@ def test(
 
                     logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
 
-                    train_run_cm.add(logits[train_mask].argmax(1), labels[train_mask], true_percentiles=percentiles[train_mask])
+                    train_run_cm.add(logits[train_mask].argmax(1), labels[train_mask],
+                                     true_percentiles=percentiles[train_mask])
                     val_run_cm.add(logits[val_mask].argmax(1), labels[val_mask], true_percentiles=percentiles[val_mask])
-                    test_run_cm.add(logits[test_mask].argmax(1), labels[test_mask], true_percentiles=percentiles[test_mask])
+                    test_run_cm.add(logits[test_mask].argmax(1), labels[test_mask],
+                                    true_percentiles=percentiles[test_mask])
 
             train_cm.append(train_run_cm)
             val_cm.append(val_run_cm)
@@ -404,7 +404,8 @@ def test(
 
         dict_model.update(dict_result)
         if save:
-            save_model(model, str(folder_path.absolute().parent), folder_path.name, param_dicts=dict_model, save_model=False)
+            save_model(model, str(folder_path.absolute().parent), folder_path.name, param_dicts=dict_model,
+                       save_model=False)
 
         list_all.append(dict(
             dict=dict_model,

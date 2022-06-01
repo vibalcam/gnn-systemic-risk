@@ -13,7 +13,6 @@ import seaborn as sns
 import torch
 from sklearn.metrics import matthews_corrcoef, mean_squared_error, mean_absolute_error
 
-
 # N_TILES = [0.75, 0.5, 0.25]
 NODE_ATTR = [
     'assets',
@@ -41,7 +40,6 @@ class ContagionDataset(dgl.data.DGLDataset):
             drop_edges: float = 0,
             add_self_loop: bool = True,
             sets_lengths: Tuple[float, float, float] = (0.8, 0.1, 0.1),
-            # seed: int = 4444,
             target: str = 'additional_stress',
             node_attributes: List[str] = NODE_ATTR,
             num_classes: int = 4,
@@ -300,7 +298,7 @@ class ClassConfusionMatrix(ConfusionMatrix):
         preds = preds.reshape(-1).cpu().detach().clone()
         pred_perc = 1 - (preds / self.size + 1 / (2 * self.size))
         self.pred_perc = torch.cat((self.pred_perc, pred_perc),
-                                          dim=0) if self.pred_perc is not None else pred_perc
+                                   dim=0) if self.pred_perc is not None else pred_perc
 
     @property
     def rmse_percentiles(self):
@@ -322,7 +320,7 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
                         otherwise, it will expect them in range `[0,self.size-1]`
         """
         super().__init__(size, name)
-        self.pseudo_perc = None
+        self.perc = None
         self.true_percentiles = None
 
     def add(self, preds: torch.Tensor, labels: torch.Tensor, true_percentiles: torch.Tensor) -> None:
@@ -338,10 +336,11 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
 
         # save as percentiles
         true_percentiles = true_percentiles.reshape(-1).cpu().detach().clone()
-        self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles), dim=0) if self.true_percentiles is not None else true_percentiles
+        self.true_percentiles = torch.cat((self.true_percentiles, true_percentiles),
+                                          dim=0) if self.true_percentiles is not None else true_percentiles
         # pseudo-percentiles in [0,1] (0 being the lowest and 1 the highest) to percentiles [0,1]
-        pseudo_perc = 1 - preds
-        self.pseudo_perc = torch.cat((self.pseudo_perc, pseudo_perc), dim=0) if self.pseudo_perc is not None else pseudo_perc
+        perc = 1 - preds
+        self.perc = torch.cat((self.perc, perc), dim=0) if self.perc is not None else perc
 
         # CONVERT TO LABELS
         pred_labels = torch.clamp(torch.floor(preds * self.size), min=0, max=self.size - 1)
@@ -349,11 +348,11 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
 
     @property
     def rmse_percentiles(self):
-        return mean_squared_error(y_true=self.true_percentiles, y_pred=self.pseudo_perc, squared=False)
+        return mean_squared_error(y_true=self.true_percentiles, y_pred=self.perc, squared=False)
 
     @property
     def mae_percentiles(self):
-        return mean_absolute_error(y_true=self.true_percentiles, y_pred=self.pseudo_perc)
+        return mean_absolute_error(y_true=self.true_percentiles, y_pred=self.perc)
 
 
 def save_pickle(obj, path: Union[str, Path]):
@@ -452,6 +451,5 @@ def load_list(path: str) -> List:
         loaded = list(literal_eval(file.read()))
     return loaded
 
-
-if __name__ == '__main__':
-    pass
+# if __name__ == '__main__':
+#     pass

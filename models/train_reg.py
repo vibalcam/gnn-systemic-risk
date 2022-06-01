@@ -1,5 +1,4 @@
 from os import path
-from os import path
 from typing import Dict, Tuple, Optional
 
 import numpy as np
@@ -10,14 +9,14 @@ from tqdm.auto import tqdm
 from .models import load_model, save_model
 from .utils import PercentilesConfusionMatrix, ContagionDataset
 
-
 PREFIX_TRAINING_PARAMS = "tr_par_"
 
 APPROACH_TARGET = {
     'base_n': lambda labels, n_classes: labels / n_classes,
-    'scale': lambda labels, n_classes: labels / (n_classes-1),
+    'scale': lambda labels, n_classes: labels / (n_classes - 1),
     'dist': lambda labels, n_classes: (2 * labels + 1) / (2 * n_classes),
 }
+
 
 def sigmoid_scale(x: torch.Tensor) -> torch.Tensor:
     # sigmoid [0,1]
@@ -34,7 +33,7 @@ def train(
         lr: float = 1e-2,
         optimizer_name: str = "adamw",
         n_epochs: int = 20,
-        scheduler_mode: str = 'min_val_rmse_perc',
+        scheduler_mode: str = 'max_val_mcc',
         debug_mode: bool = False,
         steps_save: int = 1,
         use_cpu: bool = False,
@@ -56,7 +55,7 @@ def train(
     :param lr: learning rate for the training
     :param optimizer_name: optimizer used for training. Can be `adam, adamw, sgd`
     :param n_epochs: number of epochs of training
-    :param scheduler_mode: scheduler mode to use for the learning rate scheduler. Can be `min_loss, min_val_loss, max_acc, max_val_acc, max_val_mcc, min_val_rmse_perc`
+    :param scheduler_mode: scheduler mode to use for the learning rate scheduler. Can be `min_loss, min_val_loss, max_acc, max_val_acc, max_val_mcc`
     :param use_cpu: whether to use the CPU for training
     :param device: if not none, device to use ignoring other parameters. If none, the device will be used depending on `use_cpu` and `debug_mode` parameters
     :param debug_mode: whether to use debug mode (cpu and 0 workers)
@@ -74,10 +73,6 @@ def train(
 
     # Get approach for perc to labels
     get_label = APPROACH_TARGET[approach]
-    # if approach not in ['base_n', 'scale', 'dist']:
-    #     raise Exception(f"Unknown approach {approach}")
-    # base_n = approach == 'base_n'
-    # scale_dist = get_mid_range_target if approach == 'dist' else lambda x,n: x
 
     # Tensorboard
     global_step = 0
@@ -109,13 +104,6 @@ def train(
 
     # Model
     dict_model.update(dict_param)
-    # dict_model.update(dict(
-    #     # metrics
-    #     train_loss=None,
-    #     train_acc=0,
-    #     val_acc=0,
-    #     epoch=0,
-    # ))
     model = model.to(device)
 
     # Loss
@@ -139,7 +127,7 @@ def train(
     else:
         raise Exception("Optimizer not configured")
 
-    if scheduler_mode in ["min_loss", "min_val_loss", 'min_val_rmse_perc']:
+    if scheduler_mode in ["min_loss", "min_val_loss"]:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=scheduler_patience)
     elif scheduler_mode in ["max_acc", "max_val_acc", 'max_val_mcc']:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=scheduler_patience)
@@ -212,15 +200,14 @@ def train(
                 out = sigmoid_scale(out)
 
                 # Add loss and accuracy
-                val_loss.append(loss(out[val_mask], get_label(labels[val_mask], dataset_train.num_classes)).cpu().detach().numpy())
+                val_loss.append(
+                    loss(out[val_mask], get_label(labels[val_mask], dataset_train.num_classes)).cpu().detach().numpy())
                 val_cm.add(out[val_mask], labels[val_mask], true_percentiles=percentiles[val_mask])
                 # test_cm.add(out[test_mask], target[test_mask])
 
         # calculate mean metrics
         train_loss = np.mean(train_loss)
-        # train_acc = train_cm.global_accuracy
         val_loss = np.mean(val_loss)
-        # val_acc = val_cm.global_accuracy
 
         # Step the scheduler to change the learning rate
         is_better = False
@@ -259,13 +246,6 @@ def train(
             else:
                 dict_model['val_mcc'] = met
                 is_better = True
-        elif scheduler_mode == "min_val_rmse_perc":
-            met = val_cm.rmse_percentiles
-            if (best_met := dict_model.get('val_rmse_perc', None)) is not None:
-                is_better = met <= best_met
-            else:
-                dict_model['val_rmse_perc'] = met
-                is_better = True
         else:
             met = None
 
@@ -302,7 +282,7 @@ def train(
 
             name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
             name_path = f"{d['val_acc']:.2f}_{name_path}"
-            
+
             if is_better:
                 save_model(model, save_path, name_path, param_dicts=d)
             # if periodic save, then include epoch
@@ -381,7 +361,7 @@ def test(
         # check if not emtpy
         if not any(folder_path.iterdir()):
             continue
-        
+
         print_v(f"Testing {folder_path.name}")
 
         # load model and data loader
@@ -392,11 +372,6 @@ def test(
         # training parameters
         use_edge_weight = dict_model.get(f'{PREFIX_TRAINING_PARAMS}use_edge_weight', use_edge_weight)
         approach = dict_model.get(f'{PREFIX_TRAINING_PARAMS}approach', approach_default)
-
-        # Get approach for perc to labels
-        # if approach not in ['base_n', 'scale', 'dist']:
-        #     raise Exception(f"Unknown approach {approach}")
-        # base_n = approach == 'base_n'
 
         # dataset as parameter
 
@@ -489,7 +464,6 @@ def test(
 
     return best_dict, best_acc, list_all
 
-
 # if __name__ == '__main__':
 #     from argparse import ArgumentParser
 #     args_parser = ArgumentParser()
@@ -499,21 +473,3 @@ def test(
 #                                   'if None, training mode')
 
 #     args = args_parser.parse_args()
-
-#     if args.test is not None:
-#         dataset = ContagionDataset(
-#             raw_dir='./data',
-#             drop_edges=0,
-#             sets_lengths=(0.8, 0.1, 0.1),
-#         )
-#         test(
-#             dataset=dataset,
-#             save_path='./notebooks/small_network/saved_fnn',
-#             n_runs=1,
-#             debug_mode=False,
-#             use_cpu=False,
-#             save=True,
-#             use_edge_weight=True,
-#         )
-#     else:
-#         main_train()
