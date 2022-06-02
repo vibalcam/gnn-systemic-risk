@@ -1,5 +1,5 @@
 import pathlib
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union
 
 import dgl
 import dgl.nn.pytorch as dglnn
@@ -10,7 +10,6 @@ from models.norm import GraphNorm
 from models.utils import load_dict, save_dict
 
 
-# todo finish
 class FNN(torch.nn.Module):
     def __init__(
             self,
@@ -18,12 +17,12 @@ class FNN(torch.nn.Module):
             h_features: List[int],
             out_features: int,
             activation: torch.nn.Module,
-            norm_nodes: bool = True,
+            norm_nodes: Optional[str] = True,
             dropout: float = 0.0,
             **kwargs,
     ):
         """
-        Feed Forward Network
+        Full Convolutional Neural Network
 
         :param in_features: input feature size
         :param h_features: list of hidden feature size
@@ -56,8 +55,6 @@ class FNN(torch.nn.Module):
             torch.nn.Dropout(dropout),
             torch.nn.Linear(h, out_features),
         ))
-        # self.norm_layers.append(torch.nn.Linear(h))
-        # self.layers.append(dglnn.GraphConv(h, out_features, norm=norm_edges, activation=None))
 
     def forward(self, g: dgl.data.DGLDataset, feats, **kwargs):
         for n, l in zip(self.norm_layers, self.layers):
@@ -65,15 +62,6 @@ class FNN(torch.nn.Module):
             feats = l(feats)
 
         return feats
-
-        # return self.net(feats)
-        # h = self.norm_layers[0](g, feats)
-        # h = self.layers[0](g, h, edge_weight=edge_weight)
-        # for n,l in zip(self.norm_layers[1:], self.layers[1:]):
-        #     h = n(g,h)
-        #     h = F.dropout(h, p=self.dropout, training=self.training)
-        #     h = l(g,h, edge_weight=edge_weight)
-        # return h
 
 
 class GCN(torch.nn.Module):
@@ -122,10 +110,6 @@ class GCN(torch.nn.Module):
         # todo do not finish with norm
 
     def forward(self, g: dgl.data.DGLDataset, feats, edge_weight=None):
-        # add self loops to avoid zero-in degree, move to dataset
-        # (https://docs.dgl.ai/en/0.6.x/api/python/nn.pytorch.html#graphconv)
-        # g = g.remove_self_loop().add_self_loop()
-
         h = self.norm_layers[0](g, feats)
         h = self.layers[0](g, h, edge_weight=edge_weight)
         for n, l in zip(self.norm_layers[1:], self.layers[1:]):
@@ -133,10 +117,6 @@ class GCN(torch.nn.Module):
             h = F.dropout(h, p=self.dropout, training=self.training)
             h = l(g, h, edge_weight=edge_weight)
         return h
-
-
-# # Create the model with given dimensions
-# model = GCN(g.ndata['feat'].shape[1], 16, dataset.num_classes)
 
 
 class GraphSAGE(torch.nn.Module):
@@ -195,10 +175,6 @@ class GraphSAGE(torch.nn.Module):
                                           activation=None))
 
     def forward(self, g: dgl.data.DGLDataset, feats, edge_weight=None):
-        # add self loops to avoid zero-in degree, move to dataset
-        # (https://docs.dgl.ai/en/0.6.x/api/python/nn.pytorch.html#graphconv)
-        # g = g.remove_self_loop().add_self_loop()
-
         if edge_weight is not None and self.norm_edges is not None:
             edge_weight = self.norm_edges(g, edge_weight)
 
@@ -260,7 +236,6 @@ class GAT(torch.nn.Module):
 
         # hidden layers
         for i in range(1, min(len(h_features), len(num_heads))):
-            # for h_features[i],num_heads[i] in zip(h_features[1:], num_heads[1:]):
             self.norm_layers.append(GraphNorm(norm_nodes, hidden_dim=h * last_head))
             # due to multi-head, the in_dim = num_hidden * num_heads
             self.layers.append(dglnn.GATConv(
@@ -290,10 +265,6 @@ class GAT(torch.nn.Module):
         ))
 
     def forward(self, g: dgl.data.DGLDataset, feats, **kwargs):
-        # add self loops to avoid zero-in degree, move to dataset
-        # (https://docs.dgl.ai/en/0.6.x/api/python/nn.pytorch.html#graphconv)
-        # g = g.remove_self_loop().add_self_loop()
-
         h = feats
         for n, l in zip(self.norm_layers, self.layers):
             h = n(g, h)
@@ -308,16 +279,17 @@ MODEL_CLASS = {
     'gat': GAT,
     'fnn': FNN,
 }
-
 MODEL_CLASS_KEY = 'model_class'
-
-ACTIVATION_KEY = 'activation'
-
 FOLDER_PATH_KEY = 'path_name'
 
 
-def save_model(model: torch.nn.Module, folder: str, model_name: str, param_dicts: Dict = None,
-               save_model: bool = True) -> None:
+def save_model(
+        model: torch.nn.Module,
+        folder: Union[pathlib.Path, str],
+        model_name: str,
+        param_dicts: Dict = None,
+        save_model: bool = True
+) -> None:
     """
     Saves the model so it can be loaded after
 
@@ -338,10 +310,8 @@ def save_model(model: torch.nn.Module, folder: str, model_name: str, param_dicts
     # save dict
     if param_dicts is None:
         param_dicts = {}
-    # else:  # using pickle instead would solve the problem
-    #     param_dicts = param_dicts.copy()
-    #     param_dicts[ACTIVATION_KEY] = str(type(param_dicts[ACTIVATION_KEY]).__name__)
-    # save model type
+
+    # get class of the model
     model_class = None
     for k, v in MODEL_CLASS.items():
         if isinstance(model, v):
@@ -350,6 +320,8 @@ def save_model(model: torch.nn.Module, folder: str, model_name: str, param_dicts
     if model_class is None:
         raise Exception("Model class unknown")
     param_dicts[MODEL_CLASS_KEY] = model_class
+
+    # save the dictionary as plain text and pickle
     save_dict(param_dicts, f"{folder_path}/{model_name}.dict", as_str=True)
     save_dict(param_dicts, f"{folder_path}/{model_name}.dict.pickle", as_str=False)
 
@@ -364,20 +336,15 @@ def load_model(folder_path: pathlib.Path, model_class: Optional[str] = None) -> 
     """
     # todo so it does not need to have the same name
     path = f"{folder_path.absolute()}/{folder_path.name}"
-    # use pickle instead
+    # use pickle dictionary
     dict_model = load_dict(f"{path}.dict.pickle")
 
     # get model class
     if model_class is None:
         model_class = dict_model.get(MODEL_CLASS_KEY)
 
-    # # get activation object (using pickle instead would solve the problem)
-    # act_key = dict_model.get(ACTIVATION_KEY, None)
-    # if act_key is not None and isinstance(act_key, str):
-    #     dict_model[ACTIVATION_KEY] = None if act_key == 'NoneType' else eval(f"torch.nn.{act_key}()")
-
     # set folder path
-    dict_model[FOLDER_PATH_KEY] = folder_path.name
+    dict_model[FOLDER_PATH_KEY] = str(folder_path)
 
     return load_model_data(MODEL_CLASS[model_class](**dict_model), f"{path}.th"), dict_model
 

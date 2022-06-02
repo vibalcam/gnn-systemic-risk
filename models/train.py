@@ -1,14 +1,15 @@
-import itertools
 from os import path
-from typing import List, Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional
 
 import numpy as np
 import torch
 import torch.utils.tensorboard as tb
-from tqdm.auto import trange, tqdm
+from tqdm.auto import tqdm
 
-from .models import GCN, GAT, GraphSAGE, load_model, save_model, FNN
-from .utils import ConfusionMatrix, ContagionDataset, save_dict, load_dict
+from .models import load_model, save_model
+from .utils import ClassConfusionMatrix, ContagionDataset
+
+PREFIX_TRAINING_PARAMS = "tr_par_"
 
 
 def train(
@@ -25,9 +26,10 @@ def train(
         debug_mode: bool = False,
         steps_save: int = 1,
         use_cpu: bool = False,
-        device = None,
+        device=None,
         label_smoothing: float = 0.0,
         use_edge_weight: bool = True,
+        scheduler_patience: int = 10,
 ):
     """
     Method that trains a given model
@@ -48,6 +50,7 @@ def train(
     :param steps_save: number of epoch after which to validate and save model (if conditions met)
     :param label_smoothing: label smoothing applied to CrossEntropyLoss (https://pytorch.org/docs/stable/generated/torch.nn.CrossEntropyLoss.html)
     :param use_edge_weight: If true, it uses edge weights for training when possible
+    :param scheduler_patience: value used as patience for the learning rate scheduler
     """
 
     # cpu or gpu used for training if available (gpu much faster)
@@ -58,13 +61,14 @@ def train(
     # Tensorboard
     global_step = 0
     # dictionary of training parameters
-    dict_param = {f"train_{k}": v for k, v in locals().items() if k in [
+    dict_param = {f"{PREFIX_TRAINING_PARAMS}{k}": v for k, v in locals().items() if k in [
         'lr',
         'optimizer_name',
         'batch_size',
         'scheduler_mode',
         'label_smoothing',
         'use_edge_weight',
+        'scheduler_patience',
     ]}
     dict_param.update(dict(
         train_self_loop=dataset_train.add_self_loop,
@@ -78,11 +82,6 @@ def train(
         str(name_dict)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
     ])
 
-    # name_model = '/'.join([
-    #     str(dict_model)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
-    #     f"self_loop={dataset_train.add_self_loop}/drop_edges={dataset_train.drop_edges}",
-    #     str(dict_param)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
-    # ])
     # train_logger = tb.SummaryWriter(path.join(f'{log_dir}_{type(model)}', 'train', name_model), flush_secs=1)
     # valid_logger = tb.SummaryWriter(path.join(f'{log_dir}_{type(model)}', 'valid', name_model), flush_secs=1)
     train_logger = tb.SummaryWriter(path.join(log_dir, str(type(model).__name__), name_model), flush_secs=1)
@@ -90,13 +89,13 @@ def train(
 
     # Model
     dict_model.update(dict_param)
-    dict_model.update(dict(
-        # metrics
-        train_loss=None,
-        train_acc=0,
-        val_acc=0,
-        epoch=0,
-    ))
+    # dict_model.update(dict(
+    #     # metrics
+    #     train_loss=None,
+    #     train_acc=0,
+    #     val_acc=0,
+    #     epoch=0,
+    # ))
     model = model.to(device)
 
     # Loss
@@ -107,15 +106,6 @@ def train(
         dataset_val = dataset_train
 
     # load data -> dataset_train given as parameter
-    # loader_train, loader_valid, _ = load_data(
-    #     dataset_train_path=data_path,
-    #     num_workers=num_workers,
-    #     batch_size=batch_size,
-    #     drop_last=False,
-    #     random_seed=123,
-    #     tokenizer=model.tokenizer,
-    #     device=device,
-    # )
 
     if optimizer_name == "sgd":
         optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay=1e-4)
@@ -127,21 +117,20 @@ def train(
         raise Exception("Optimizer not configured")
 
     if scheduler_mode == "min_loss":
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=10)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=scheduler_patience)
     elif scheduler_mode in ["max_acc", "max_val_acc", 'max_val_mcc']:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=10)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=scheduler_patience)
     else:
         raise Exception("Optimizer not configured")
 
     # print(f"{name_model}")
-
     for epoch in range(n_epochs):
-    # for epoch in (p_bar := trange(n_epochs, leave = True)):
+        # for epoch in (p_bar := trange(n_epochs, leave = True)):
         # p_bar.set_description(f"{name_model} -> best in {dict_model['epoch']}: {dict_model['val_acc']}")
-
         # print(f"{epoch} of {n_epochs}")
+
         train_loss = []
-        train_cm = ConfusionMatrix(dataset_train.num_classes, name='train')
+        train_cm = ClassConfusionMatrix(dataset_train.num_classes, name='train')
 
         # Start training: train mode
         model.train()
@@ -149,10 +138,11 @@ def train(
             g = g.to(device)
 
             # Get data
-            features = g.ndata['feat'].to(device)
-            labels = g.ndata['label'].to(device)
-            edge_weight = g.edata['weight'].to(device)
-            train_mask = g.ndata['train_mask'].to(device)
+            features = g.ndata['feat']
+            labels = g.ndata['label']
+            percentiles = g.ndata['perc']
+            edge_weight = g.edata['weight']
+            train_mask = g.ndata['train_mask']
 
             # Compute loss on training and update parameters
             logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
@@ -165,14 +155,14 @@ def train(
 
             # Add train loss and accuracy
             train_loss.append(loss_train.cpu().detach().numpy())
-            train_cm.add(logits[train_mask].argmax(1), labels[train_mask])
+            train_cm.add(logits[train_mask].argmax(1), labels[train_mask], true_percentiles=percentiles[train_mask])
 
         # Evaluate the model
         # Can be done in combination with training if drop_edges is 0
         # No performance issue for small graphs so we can separate it
         val_loss = []
-        val_cm = ConfusionMatrix(dataset_train.num_classes, name='val')
-        # test_cm = ConfusionMatrix(dataset_train.num_classes)
+        val_cm = ClassConfusionMatrix(dataset_train.num_classes, name='val')
+
         model.eval()
         with torch.no_grad():
             for g in dataset_val:
@@ -181,32 +171,57 @@ def train(
                 # Get data
                 features = g.ndata['feat']
                 labels = g.ndata['label']
+                percentiles = g.ndata['perc']
                 edge_weight = g.edata['weight']
                 val_mask = g.ndata['val_mask']
-                # test_mask = g.ndata['test_mask']
 
                 logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
 
                 # Add loss and accuracy
                 val_loss.append(loss(logits[val_mask], labels[val_mask]).cpu().detach().numpy())
-                val_cm.add(logits[val_mask].argmax(1), labels[val_mask])
-                # test_cm.add(logits[test_mask].argmax(1), labels[test_mask])
+                val_cm.add(logits[val_mask].argmax(1), labels[val_mask], true_percentiles=percentiles[val_mask])
 
         # calculate mean metrics
         train_loss = np.mean(train_loss)
-        train_acc = train_cm.global_accuracy
+        # train_acc = train_cm.global_accuracy
         val_loss = np.mean(val_loss)
-        val_acc = val_cm.global_accuracy
+        # val_acc = val_cm.global_accuracy
 
         # Step the scheduler to change the learning rate
+        is_better = False
         if scheduler_mode == "min_loss":
-            scheduler.step(train_loss)
+            met = train_loss
+            if (best_met := dict_model.get('train_loss', None)) is not None:
+                is_better = met <= best_met
+            else:
+                dict_model['train_loss'] = met
+                is_better = True
         elif scheduler_mode == "max_acc":
-            scheduler.step(train_acc)
+            met = train_cm.global_accuracy
+            if (best_met := dict_model.get('train_acc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['train_acc'] = met
+                is_better = True
         elif scheduler_mode == "max_val_acc":
-            scheduler.step(val_acc)
+            met = val_cm.global_accuracy
+            if (best_met := dict_model.get('val_acc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['val_acc'] = met
+                is_better = True
         elif scheduler_mode == 'max_val_mcc':
-            scheduler.step(val_cm.matthews_corrcoef)
+            met = val_cm.matthews_corrcoef
+            if (best_met := dict_model.get('val_mcc', None)) is not None:
+                is_better = met >= best_met
+            else:
+                dict_model['val_mcc'] = met
+                is_better = True
+        else:
+            met = None
+
+        if met is not None:
+            scheduler.step(met)
 
         # log metrics
         global_step += 1
@@ -223,25 +238,31 @@ def train(
             train_logger.add_scalar('lr', optimizer.param_groups[0]['lr'], global_step=global_step)
 
         # Save the model
-        if (reg_save := (epoch % steps_save == steps_save - 1)) or (val_acc >= dict_model["val_acc"]):
-            # todo add more info
+        if (is_periodic := epoch % steps_save == steps_save - 1) or is_better:
+            d = dict_model if is_better else dict_model.copy()
+
             # print(f"Best val acc {epoch}: {val_acc}")
-            dict_model["train_loss"] = train_loss
-            dict_model["train_acc"] = train_acc
-            dict_model["val_acc"] = val_acc
-            dict_model["epoch"] = epoch+1
-            # name_path = name_model.replace('/', '_')
+            d["epoch"] = epoch + 1
+            # metrics
+            d["train_loss"] = train_loss
+            d["train_acc"] = train_cm.global_accuracy
+            d["val_acc"] = val_cm.global_accuracy
+            d["val_mcc"] = val_cm.matthews_corrcoef
+
             name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
-            name_path = f"{dict_model['val_acc']:.2f}_{name_path}"
+            name_path = f"{d['val_acc']:.2f}_{name_path}"
+
+            if is_better:
+                save_model(model, save_path, name_path, param_dicts=d)
             # if periodic save, then include epoch
-            if reg_save:
-                name_path = f"{name_path}_{epoch+1}"
-            save_model(model, save_path, name_path, param_dicts=dict_model)
-    
-    return (save_path, name_path)
+            if is_periodic:
+                name_path = f"{name_path}_{epoch + 1}"
+                save_model(model, save_path, name_path, param_dicts=d)
+
+            save_model(model, save_path, name_path, param_dicts=d)
 
 
-def log_confussion_matrix(logger, confussion_matrix: ConfusionMatrix, global_step: int, suffix=''):
+def log_confussion_matrix(logger, confussion_matrix: ClassConfusionMatrix, global_step: int, suffix=''):
     """
     Logs the data in the confussion matrix to a logger
     :param logger: tensorboard logger to use for logging
@@ -264,7 +285,8 @@ def test(
         use_cpu: bool = False,
         save: bool = True,
         use_edge_weight: bool = True,
-        verbose:bool = False,
+        verbose: bool = False,
+        **kwargs,
 ) -> Tuple[Dict, float]:
     """
     Calculates the metric on the test set of the model given in args.
@@ -276,7 +298,8 @@ def test(
     :param use_cpu: whether to use the CPU for training
     :param debug_mode: whether to use debug mode (cpu and 0 workers)
     :param save: whether to save the results in the model dict
-    :param use_edge_weight: If true, it uses edge weights for training when possible
+    :param use_edge_weight: If true, it uses edge weights for training when possible.
+                                    Only used if the model's dictionary does not have this parameter
     :param verbose: whether to print results
 
     :return: returns the best model's dict_model, test accuracy and list of all models with test information
@@ -300,30 +323,30 @@ def test(
     list_all = []
     paths = list(Path(save_path).glob('*'))
     for folder_path in tqdm(paths):
+        # check if not emtpy
+        if not any(folder_path.iterdir()):
+            continue
+
         print_v(f"Testing {folder_path.name}")
 
         # load model and data loader
         del model
         model, dict_model = load_model(folder_path)
         model = model.to(device).eval()
-        # _, _, loader_test = load_data(
-        #     dataset_path=data_path,
-        #     num_workers=num_workers,
-        #     batch_size=batch_size,
-        #     drop_last=False,
-        #     random_seed=123,
-        #     tokenizer=model.tokenizer,
-        #     device=device,
-        # )
+
+        # training parameters
+        use_edge_weight = dict_model.get(f'{PREFIX_TRAINING_PARAMS}use_edge_weight', use_edge_weight)
+
+        # dataset given as parameter
 
         # start testing
         train_cm = []
         val_cm = []
         test_cm = []
         for k in range(n_runs):
-            train_run_cm = ConfusionMatrix(dataset.num_classes, name='train')
-            val_run_cm = ConfusionMatrix(dataset.num_classes, name='val')
-            test_run_cm = ConfusionMatrix(dataset.num_classes, name='test')
+            train_run_cm = ClassConfusionMatrix(dataset.num_classes, name='train')
+            val_run_cm = ClassConfusionMatrix(dataset.num_classes, name='val')
+            test_run_cm = ClassConfusionMatrix(dataset.num_classes, name='test')
 
             with torch.no_grad():
                 for g in dataset:
@@ -331,6 +354,7 @@ def test(
 
                     # Get data
                     features = g.ndata['feat']
+                    percentiles = g.ndata['perc']
                     labels = g.ndata['label']
                     edge_weight = g.edata['weight']
                     train_mask = g.ndata['train_mask']
@@ -339,43 +363,48 @@ def test(
 
                     logits = model(g, features, edge_weight=edge_weight if use_edge_weight else None)
 
-                    train_run_cm.add(logits[train_mask].argmax(1), labels[train_mask])
-                    val_run_cm.add(logits[val_mask].argmax(1), labels[val_mask])
-                    test_run_cm.add(logits[test_mask].argmax(1), labels[test_mask])
-
-            # train_run_acc = train_run_cm.global_accuracy.item()
-            # val_run_acc = val_run_cm.global_accuracy.item()
-            # test_run_acc = test_run_cm.global_accuracy.item()
-            # print_v(f"Run {k}: test {test_run_acc};   valid {val_run_acc}")
+                    train_run_cm.add(logits[train_mask].argmax(1), labels[train_mask],
+                                     true_percentiles=percentiles[train_mask])
+                    val_run_cm.add(logits[val_mask].argmax(1), labels[val_mask], true_percentiles=percentiles[val_mask])
+                    test_run_cm.add(logits[test_mask].argmax(1), labels[test_mask],
+                                    true_percentiles=percentiles[test_mask])
 
             train_cm.append(train_run_cm)
             val_cm.append(val_run_cm)
             test_cm.append(test_run_cm)
 
-        # train_acc = np.mean(train_acc)
-        # val_acc = np.mean(val_acc)
-        # test_acc = np.mean(test_acc)
         dict_result = {
-            "train_mcc": np.mean([k.matthews_corrcoef for k in train_cm]),
-            "val_mcc": np.mean([k.matthews_corrcoef for k in val_cm]),
-            "test_mcc": np.mean([k.matthews_corrcoef for k in test_cm]),
-
             "train_rmse": np.mean([k.rmse for k in train_cm]),
             "val_rmse": np.mean([k.rmse for k in val_cm]),
             "test_rmse": np.mean([k.rmse for k in test_cm]),
 
+            "train_mae": np.mean([k.mae for k in train_cm]),
+            "val_mae": np.mean([k.mae for k in val_cm]),
+            "test_mae": np.mean([k.mae for k in test_cm]),
+
+            "train_mcc": np.mean([k.matthews_corrcoef for k in train_cm]),
+            "val_mcc": np.mean([k.matthews_corrcoef for k in val_cm]),
+            "test_mcc": np.mean([k.matthews_corrcoef for k in test_cm]),
+
             "train_acc": np.mean([k.global_accuracy for k in train_cm]),
             "val_acc": np.mean([k.global_accuracy for k in val_cm]),
             "test_acc": np.mean([k.global_accuracy for k in test_cm]),
+
+            "train_rmse_perc": np.mean([k.rmse_percentiles for k in train_cm]),
+            "val_rmse_perc": np.mean([k.rmse_percentiles for k in val_cm]),
+            "test_rmse_perc": np.mean([k.rmse_percentiles for k in test_cm]),
+
+            "train_mae_perc": np.mean([k.mae_percentiles for k in train_cm]),
+            "val_mae_perc": np.mean([k.mae_percentiles for k in val_cm]),
+            "test_mae_perc": np.mean([k.mae_percentiles for k in test_cm]),
         }
 
         print_v(f"RESULT: {dict_result}")
 
         dict_model.update(dict_result)
         if save:
-            save_model(model, str(folder_path.absolute().parent), folder_path.name, param_dicts=dict_model, save_model=False)
-        
-        # list_all.append((dict_model, test_acc, val_run_cm, test_run_cm))
+            save_model(model, str(folder_path.absolute().parent), folder_path.name, param_dicts=dict_model,
+                       save_model=False)
 
         list_all.append(dict(
             dict=dict_model,
@@ -392,104 +421,31 @@ def test(
     return best_dict, best_acc, list_all
 
 
-def main_train():
-    """
-    A training example
-    """
-    data_dir = './data'
-    log_dir = './models/logs'
-    save_model = './models/saved'
+# if __name__ == '__main__':
+#     from argparse import ArgumentParser
 
-    dataset = ContagionDataset(
-        raw_dir=data_dir,
-        drop_edges=0,
-        sets_lengths=(0.8, 0.1, 0.1),
-    )
+#     args_parser = ArgumentParser()
 
-    # gcn_model = dict(
-    #     in_features=[len(dataset.node_attributes)],
-    #     h_features=[[5, 10], [10, 15], [5, 5, 5], [5, 5, 5, 5], [5, 10, 15], [5, 10, 15, 20]],
-    #     out_features=[dataset.num_classes],
-    #     activation=[torch.nn.ReLU()],
-    #     norm_edges=['both', 'none'],
-    #     norm_nodes=[None, 'bn', 'gn'],
-    #     dropout=[0.2, 0.5, 0.0],
-    #     # other
-    #     lr=[1],
-    #     label_smoothing=[0.0, 0.2, 0.4],
-    #     use_edge_weight=[True],
-    # )
-    # list_model = [dict(zip(gcn_model.keys(), k)) for k in itertools.product(*gcn_model.values())]
+#     args_parser.add_argument('-t', '--test', type=int, default=None,
+#                              help='the number of test runs that will be averaged to give the test result,'
+#                                   'if None, training mode')
 
-    fnn_model = dict(
-        in_features=[len(dataset.node_attributes)],
-        h_features=[[5, 10], [10, 15], [5, 5, 5], [5, 10, 15], [5, 10, 15, 20], [5], [10], [15]],
-        # h_features=[[5, 10], [10, 15], [5], [10], [15], [10,15]],
-        out_features=[dataset.num_classes],
-        activation=[torch.nn.ReLU()],
-        norm_nodes=[None, 'bn', 'gn'],
-        dropout=[0.2, 0.5, 0.0],
-        # other
-        lr=[1, 1e-1, 1e-2],
-        label_smoothing=[0.0, 0.2, 0.4],
-    )
-    list_model = [dict(zip(fnn_model.keys(), k)) for k in itertools.product(*fnn_model.values())]
+#     args = args_parser.parse_args()
 
-    for d in list_model:
-        lr = d.pop('lr')
-        ls = d.pop('label_smoothing')
-        # use_edge_weight = d.pop('use_edge_weight')
-        for drop_edges in [0, 0.2, 0.4]:
-            dataset = ContagionDataset(
-                raw_dir=data_dir,
-                drop_edges=drop_edges,
-                sets_lengths=(0.8, 0.1, 0.1),
-            )
-
-            train(
-                model=FNN(**d),
-                dict_model=d,
-                dataset_train=dataset,
-                dataset_val=dataset,
-                log_dir=log_dir,
-                save_path=save_model,
-                lr=lr,
-                optimizer_name="adamw",
-                n_epochs=100,
-                scheduler_mode='max_val_acc',
-                debug_mode=False,
-                steps_save=1,
-                use_cpu=False,
-                label_smoothing=ls,
-                use_edge_weight=False,
-            )
-
-
-if __name__ == '__main__':
-    from argparse import ArgumentParser
-    args_parser = ArgumentParser()
-
-    args_parser.add_argument('-t', '--test', type=int, default=None,
-                             help='the number of test runs that will be averaged to give the test result,'
-                                  'if None, training mode')
-
-    args = args_parser.parse_args()
-
-    if args.test is not None:
-        dataset = ContagionDataset(
-            raw_dir='./data',
-            drop_edges=0,
-            sets_lengths=(0.8, 0.1, 0.1),
-        )
-        test(
-            dataset=dataset,
-            save_path='./notebooks/small_network/saved_fnn',
-            # save_path='./notebooks/small_network/saved_sage',
-            n_runs=1,
-            debug_mode=False,
-            use_cpu=False,
-            save=True,
-            use_edge_weight=True,
-        )
-    else:
-        main_train()
+#     if args.test is not None:
+#         dataset = ContagionDataset(
+#             raw_dir='./data',
+#             drop_edges=0,
+#             sets_lengths=(0.8, 0.1, 0.1),
+#         )
+#         test(
+#             dataset=dataset,
+#             save_path='./notebooks/small_network/saved_fnn',
+#             n_runs=1,
+#             debug_mode=False,
+#             use_cpu=False,
+#             save=True,
+#             use_edge_weight=True,
+#         )
+#     else:
+#         main_train()

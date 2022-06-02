@@ -1,7 +1,5 @@
-from platform import node
 import torch
 import torch.nn as nn
-import dgl.nn.pytorch as dglnn
 
 
 # class NormModule(nn.Module):
@@ -27,7 +25,6 @@ import dgl.nn.pytorch as dglnn
 #         else:
 #             self.edge_type = True
 #             self.norm = dglnn.EdgeWeightNorm(norm_type, kwargs)
-    
 #     def forward(self, graph, node_feats=None, edge_weights=None):
 #         # distintion is made so when used it is made explicit what is going through the normalization
 #         if self.edge_type is None:
@@ -36,7 +33,6 @@ import dgl.nn.pytorch as dglnn
 #             return self.norm(graph, edge_weights)
 #         else:
 #             return self.norm(graph, node_feats)
-        
 
 
 class GraphNorm(nn.Module):
