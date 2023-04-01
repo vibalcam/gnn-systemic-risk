@@ -223,7 +223,7 @@ class GAT(torch.nn.Module):
         h = h_features[0]
         last_head = num_heads[0]
         self.norm_layers.append(GraphNorm(norm_nodes, hidden_dim=in_features))
-        self.layers.append(dglnn.GATConv(
+        self.layers.append(dglnn.GATv2Conv(
             in_feats=in_features,
             out_feats=h,
             num_heads=last_head,
@@ -238,7 +238,7 @@ class GAT(torch.nn.Module):
         for i in range(1, min(len(h_features), len(num_heads))):
             self.norm_layers.append(GraphNorm(norm_nodes, hidden_dim=h * last_head))
             # due to multi-head, the in_dim = num_hidden * num_heads
-            self.layers.append(dglnn.GATConv(
+            self.layers.append(dglnn.GATv2Conv(
                 in_feats=h * last_head,
                 out_feats=h_features[i],
                 num_heads=num_heads[i],
@@ -253,7 +253,7 @@ class GAT(torch.nn.Module):
 
         # output projection
         self.norm_layers.append(GraphNorm(norm_nodes, hidden_dim=h * last_head))
-        self.layers.append(dglnn.GATConv(
+        self.layers.append(dglnn.GATv2Conv(
             in_feats=h * last_head,
             out_feats=out_features,
             num_heads=1,
@@ -357,5 +357,24 @@ def load_model_data(model: torch.nn.Module, model_path: str) -> torch.nn.Module:
     :param model: model into which to load the saved model
     :return: the loaded model
     """
-    model.load_state_dict(torch.load(model_path, map_location='cpu'))
+    loaded = torch.load(model_path, map_location='cpu')
+
+    # # graph sage bias renamed from saved
+    # if isinstance(model, GraphSAGE):
+    #     try:
+    #         model.load_state_dict(loaded)
+    #         return model
+    #     except RuntimeError:
+    #         import re
+    #         pattern = r"layers\.\d\.bias"
+    #         remapped_state_dict = {}
+    #         for key, value in loaded.items():
+    #             if  re.match(pattern, key):
+    #                 new_key = 'layers.' + key.split('.')[1] + '.fc_self.bias'
+    #                 remapped_state_dict[new_key] = value
+    #             else:
+    #                 remapped_state_dict[key] = value
+    #         loaded = remapped_state_dict
+
+    model.load_state_dict(loaded)
     return model

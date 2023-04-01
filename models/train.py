@@ -1,3 +1,4 @@
+import datetime
 from os import path
 from typing import Dict, Tuple, Optional
 
@@ -78,9 +79,10 @@ def train(
     name_dict = dict_model.copy()
     name_dict.update(dict_param)
     # model name
-    name_model = '/'.join([
-        str(name_dict)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
-    ])
+    # name_model = '/'.join([
+    #     str(list(name_dict.values()))[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
+    # ])
+    name_model = str(datetime.datetime.now().date()) + '_' + str(datetime.datetime.now().time()).replace(':', '.')
 
     # train_logger = tb.SummaryWriter(path.join(f'{log_dir}_{type(model)}', 'train', name_model), flush_secs=1)
     # valid_logger = tb.SummaryWriter(path.join(f'{log_dir}_{type(model)}', 'valid', name_model), flush_secs=1)
@@ -249,7 +251,9 @@ def train(
             d["val_acc"] = val_cm.global_accuracy
             d["val_mcc"] = val_cm.matthews_corrcoef
 
-            name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
+            # long path error on windows
+            # name_path = str(list(name_dict.values()))[1:-1].replace('/', '_').replace(',', '_').replace("'", '').replace(' ', '')
+            name_path = name_model
             name_path = f"{d['val_acc']:.2f}_{name_path}"
 
             if is_better:
@@ -373,6 +377,7 @@ def test(
             val_cm.append(val_run_cm)
             test_cm.append(test_run_cm)
 
+        # mean metrics for runs
         dict_result = {
             "train_rmse": np.mean([k.rmse for k in train_cm]),
             "val_rmse": np.mean([k.rmse for k in val_cm]),
@@ -403,8 +408,7 @@ def test(
 
         dict_model.update(dict_result)
         if save:
-            save_model(model, str(folder_path.absolute().parent), folder_path.name, param_dicts=dict_model,
-                       save_model=False)
+            save_model(model, str(folder_path.absolute().parent), folder_path.name, param_dicts=dict_model, save_model=False)
 
         list_all.append(dict(
             dict=dict_model,

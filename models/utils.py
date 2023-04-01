@@ -31,9 +31,6 @@ class ContagionDataset(dgl.data.DGLDataset):
     The graphs have the following edge attributes: `weight`.
     """
 
-    # seed to randomly generate train, valid and test sets
-    seed = 4444
-
     def __init__(
             self,
             raw_dir: str = './data',
@@ -43,6 +40,7 @@ class ContagionDataset(dgl.data.DGLDataset):
             target: str = 'additional_stress',
             node_attributes: List[str] = NODE_ATTR,
             num_classes: int = 4,
+            seed:int = 4444
     ):
         """
         Initializer for the dataset. 
@@ -64,9 +62,10 @@ class ContagionDataset(dgl.data.DGLDataset):
         self.sets_lengths = sets_lengths
         self.drop_edges = drop_edges
         self.add_self_loop = add_self_loop
+        self.seed = seed
 
-        # random generator for dataset
-        self.random_generator = torch.Generator().manual_seed(self.seed)
+        # initialized in process
+        self.random_generator = None
 
         # self.num_classes = len(N_TILES) + 1
         self.num_classes = num_classes
@@ -142,6 +141,8 @@ class ContagionDataset(dgl.data.DGLDataset):
         val_mask[n_train:n_train + n_val] = True
         test_mask[n_train + n_val:] = True
         # shuffle and set mask in nodes
+        # random generator for dataset
+        self.random_generator = torch.Generator().manual_seed(self.seed)
         idx = torch.randperm(n_nodes, generator=self.random_generator)
         graph_dgl.ndata['train_mask'] = train_mask[idx]
         graph_dgl.ndata['val_mask'] = val_mask[idx]

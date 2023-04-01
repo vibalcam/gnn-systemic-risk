@@ -1,4 +1,5 @@
 from os import path
+import datetime
 from typing import Dict, Tuple, Optional
 
 import numpy as np
@@ -95,9 +96,10 @@ def train(
     name_dict = dict_model.copy()
     name_dict.update(dict_param)
     # model name
-    name_model = '/'.join([
-        str(name_dict)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
-    ])
+    # name_model = '/'.join([
+    #     str(name_dict)[1:-1].replace(',', '/').replace("'", '').replace(' ', '').replace(':', '='),
+    # ])
+    name_model = str(datetime.datetime.now().date()) + '_' + str(datetime.datetime.now().time()).replace(':', '.')
 
     train_logger = tb.SummaryWriter(path.join(log_dir, str(type(model).__name__), name_model), flush_secs=1)
     valid_logger = train_logger
@@ -280,7 +282,8 @@ def train(
             d["val_mcc"] = val_cm.matthews_corrcoef
             d["val_rmse_perc"] = val_cm.rmse_percentiles
 
-            name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
+            # name_path = str(list(name_dict.values()))[1:-1].replace(',', '_').replace("'", '').replace(' ', '')
+            name_path = name_model
             name_path = f"{d['val_acc']:.2f}_{name_path}"
 
             if is_better:

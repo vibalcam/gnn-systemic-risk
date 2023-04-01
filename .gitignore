@@ -10,8 +10,9 @@ systemic-risk-predictor.Rproj
 **/tmp*/
 **/logs*/
 **/result.txt
-**/results.pickle
 **/notes.md
+results.pickle
+
 
 **/saved*/*
 # Best models

@@ -11,18 +11,18 @@ class ResultCollection:
     class Result:
         # list of metrics to be filtered
         METRIC_PREFIX = [j + i for i in [
-            "mcc",
-            "acc",
-            "rmse",
-            "mae",
-            "rmse_perc",
-            "mae_perc",
-        ] for j in [
-                             'train_',
-                             'val_',
-                             'test_',
-                         ]
-                         ]
+                "mcc",
+                "acc",
+                "rmse",
+                "mae",
+                "rmse_perc",
+                "mae_perc",
+            ] for j in [
+                'train_',
+                'val_',
+                'test_',
+            ]
+        ]
 
         def __init__(self, data: List[Dict], uid: str, group: str = None, **kwargs):
             """
