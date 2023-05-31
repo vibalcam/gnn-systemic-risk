@@ -12,6 +12,7 @@ systemic-risk-predictor.Rproj
 **/result.txt
 **/notes.md
 results.pickle
+notebooks/results
 
 
 **/saved*/*

@@ -11,6 +11,9 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import torch
+import networkx as nx
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 from sklearn.metrics import matthews_corrcoef, mean_squared_error, mean_absolute_error
 
 # N_TILES = [0.75, 0.5, 0.25]
@@ -129,6 +132,8 @@ class ContagionDataset(dgl.data.DGLDataset):
         # add bank ids
         nx.set_node_attributes(graph, {k: {'id': int(k[1:])} for k in is_quant.index})
 
+        self.nx_graph = graph
+
         # CREATE DGL GRAPH
         graph_dgl = dgl.from_networkx(graph, node_attrs=['feat', 'label', 'perc', 'id'], edge_attrs=['weight'])
 
@@ -172,6 +177,70 @@ class ContagionDataset(dgl.data.DGLDataset):
 
         return k
 
+    def plot_classes(self, name, network='eur'):
+        # plt.switch_backend('pgf')
+        graph = self.nx_graph
+
+        legend_colors = ['#FF0000', '#FFA500', '#7FFF00', '#008000']
+        legend_labels = ['Class 1', 'Class 2', 'Class 3', 'Class 4']
+        node_color = [legend_colors[graph.nodes[node]['label']] for node in graph.nodes]
+
+        # Set node size based on degree
+        node_size = [10*d for n, d in graph.degree()]
+
+        # Use force-directed layout algorithm to position nodes
+        if network == 'eur':
+            pos = nx.spring_layout(graph, iterations=200, k=120, scale=2, seed=self.seed)
+        else:
+            pos = nx.spring_layout(graph, iterations=200, k=0.5, scale=1, seed=self.seed)
+
+        # Plot the graph
+        fig = plt.figure(figsize=(15, 15))
+        nx.draw_networkx_nodes(graph, pos, node_size=node_size, node_color=node_color, alpha=0.8)
+        nx.draw_networkx_edges(graph, pos, width=0.1, alpha=0.5)
+        plt.axis('off')
+        legend_handles = []
+        for color, label in zip(legend_colors, legend_labels):
+            legend_handles.append(mpatches.Patch(color=color, label=label))
+
+        plt.legend(handles=legend_handles, title='Node colors', loc='best')
+        fig.savefig(name, format='svg')
+        # fig.savefig('my_graph.pgf')
+        # plt.show()
+
+        return fig
+
+    def plot_train_test(self, name, network='eur'):
+        graph = self.nx_graph
+
+        legend_colors = ['#B9B9B9', 'red']
+        legend_labels = ['Test', 'Train&Validation']
+        mask = torch.logical_or(self.graphs[0].ndata['train_mask'], self.graphs[0].ndata['val_mask']).int()
+        node_color = [legend_colors[self.graphs[0].ndata['train_mask'][idx]] for idx, node in enumerate(graph.nodes)]
+
+        # Set node size based on degree
+        node_size = [10*d for n, d in graph.degree()]
+
+        # Use force-directed layout algorithm to position nodes
+        if network == 'eur':
+            pos = nx.spring_layout(graph, iterations=200, k=120, scale=2, seed=self.seed)
+        else:
+            pos = nx.spring_layout(graph, iterations=200, k=0.5, scale=1, seed=self.seed)
+
+        # Plot the graph
+        fig = plt.figure(figsize=(15, 15))
+        nx.draw_networkx_nodes(graph, pos, node_size=node_size, node_color=node_color, alpha=0.8)
+        nx.draw_networkx_edges(graph, pos, width=0.1, alpha=0.5)
+        plt.axis('off')
+        legend_handles = []
+        for color, label in zip(legend_colors, legend_labels):
+            legend_handles.append(mpatches.Patch(color=color, label=label))
+
+        plt.legend(handles=legend_handles, title='Node colors', loc='best')
+        fig.savefig(name, format='svg')
+
+        return fig
+
 
 class ConfusionMatrix:
     """
@@ -202,7 +271,37 @@ class ConfusionMatrix:
         self.matrix = torch.zeros(size, size, dtype=torch.float)
         self.preds = None
         self.labels = None
+        self.pred_perc = None
+        self.true_percentiles = None
         self.name = name
+
+    def bootstrap(self, metric, n=1000, seed=12345, reg=False):
+        """
+        Bootstraps the confusion matrix to get a confidence interval for the given metric
+
+        :param n: number of bootstrap samples
+        :param metric: metric to compute
+        :param seed: random seed
+        :param significance: significance level
+        :return: (lower, upper, mean)
+        """
+        if reg:
+            p = self.pred_perc
+            l = self.true_percentiles
+        else:
+            p = self.preds
+            l = self.labels
+
+        torch.manual_seed(seed)
+        accs = []
+        for _ in range(n):
+            idx = np.random.choice(p.shape[0], size=p.shape[0], replace=True).astype(int)
+            preds = p[idx]
+            labels = l[idx]
+            accs.append(metric(y_true=labels.numpy(), y_pred=preds.numpy()))
+        accs = np.asarray(accs)
+
+        return accs
 
     def __repr__(self) -> str:
         return self.matrix.numpy().__repr__()
@@ -257,7 +356,7 @@ class ConfusionMatrix:
 
     @property
     def normalize(self):
-        return self.matrix / (self.matrix.sum() + 1e-5)
+        return self.matrix / (self.matrix.sum() + 1e-6)
 
     def visualize(self, normalize: bool = False):
         """
@@ -266,10 +365,10 @@ class ConfusionMatrix:
         """
         plt.figure(figsize=(15, 10))
 
-        matrix = self.normalize.numpy() if normalize else self.matrix.numpy()
+        matrix = self.normalize.numpy() * 100 if normalize else self.matrix.numpy()
 
         df_cm = pd.DataFrame(matrix).astype(int)
-        heatmap = sns.heatmap(df_cm, annot=True, fmt="d")
+        heatmap = sns.heatmap(df_cm, annot=True, fmt=".2f")
 
         heatmap.yaxis.set_ticklabels(heatmap.yaxis.get_ticklabels(), rotation=0, ha='right', fontsize=15)
         heatmap.xaxis.set_ticklabels(heatmap.xaxis.get_ticklabels(), rotation=45, ha='right', fontsize=15)
@@ -282,8 +381,8 @@ class ConfusionMatrix:
 class ClassConfusionMatrix(ConfusionMatrix):
     def __init__(self, size=5, name: str = ''):
         super().__init__(size, name)
-        self.true_percentiles = None
-        self.pred_perc = None
+        # self.true_percentiles = None
+        # self.pred_perc = None
 
     def add(self, preds: torch.Tensor, labels: torch.Tensor, true_percentiles: torch.Tensor) -> None:
         super().add(preds, labels)
@@ -319,7 +418,11 @@ class PercentilesConfusionMatrix(ConfusionMatrix):
         """
         super().__init__(size, name)
         self.perc = None
-        self.true_percentiles = None
+        # self.true_percentiles = None
+
+    def bootstrap(self, *args, **kwargs):
+        self.pred_perc = self.perc
+        return super().bootstrap(*args, **kwargs)
 
     def add(self, preds: torch.Tensor, labels: torch.Tensor, true_percentiles: torch.Tensor) -> None:
         """

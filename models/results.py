@@ -1,10 +1,35 @@
 from pathlib import Path
 from typing import List, Dict
+from matplotlib import pyplot as plt
+from torchmetrics.functional import auroc
 
 import numpy as np
 import pandas as pd
 
 from models.models import load_model, save_model
+
+
+def confidence_interval(x, significance: float = 5):
+    # Calculate the significance % confidence interval for each value
+    half_significance = significance / 2
+    return np.percentile(x, [half_significance, 100-half_significance]), x.mean()
+
+
+def plot_bootstrap_graph(x, aucrocs, conf_intervals, label, log_scale=False, x_label='Percentages', y_label='MCC'):
+    # Plot the confidence interval for each value
+    x = np.log10(x) if log_scale else x
+    plt.errorbar(x, aucrocs, yerr=[
+        [auc - conf_int[0] for auc, conf_int in zip(aucrocs, conf_intervals)], [conf_int[1] - auc for auc, conf_int in zip(aucrocs, conf_intervals)],
+    ], fmt='o-', label=label, capsize=3)
+    
+    # plt.errorbar(x, [np.mean(auc) for auc in aucrocs], yerr=[
+    #     [np.mean(auc) - conf_int[0] for auc, conf_int in zip(aucrocs, conf_intervals)], [conf_int[1] - np.mean(auc) for auc, conf_int in zip(aucrocs, conf_intervals)],
+    # ], fmt='o-', label=label)
+    
+    plt.xticks(x)
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.legend()
 
 
 class ResultCollection:
