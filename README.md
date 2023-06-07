@@ -4,7 +4,7 @@ Code for systemic risk classification and percentile prediction using Graph Neur
 
 Repo for the paper: 
 
-**“Predicting Systemic Risk in Financial Systems Using Deep Graph Learning”**
+[**“Predicting Systemic Risk in Financial Systems Using Deep Graph Learning”**](https://doi.org/10.1016/j.iswa.2023.200240)
 
 ## Installation
 
