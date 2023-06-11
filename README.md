@@ -45,3 +45,20 @@ The networks themselves can be found inside the `data` folder. Each network is d
 #### Models
 
 The code for the models and training can be found in the [models](models) folder. The `models.py` file contains the model definitions, `train.py` contains the code to train the classification models, and `train_reg.py` contains the code to train the percentile regression models.
+
+## Reference
+If you find it helpful, please cite our paper:
+```
+@article{balmaseda_predicting_2023,
+	title = {Predicting systemic risk in financial systems using {Deep} {Graph} {Learning}},
+	volume = {19},
+	issn = {2667-3053},
+	url = {https://www.sciencedirect.com/science/article/pii/S2667305323000650},
+	doi = {https://doi.org/10.1016/j.iswa.2023.200240},
+	journal = {Intelligent Systems with Applications},
+	author = {Balmaseda, Vicente and Coronado, María and de Cadenas-Santiago, Gonzalo},
+	year = {2023},
+	keywords = {Financial networks modeling, Graph neural networks (GNN), Label regression, Model selection, Network simulation, Neural networks},
+	pages = {200240},
+}
+```
