@@ -1,10 +1,9 @@
 # Predicting Systemic Risk in Financial Systems Using Deep Graph Learning
 
-Code for systemic risk classification and percentile prediction using Graph Neural Networks and Class to Regression (C2R).
-
 Repo for the paper: 
-
 [**“Predicting Systemic Risk in Financial Systems Using Deep Graph Learning”**](https://doi.org/10.1016/j.iswa.2023.200240)
+
+Code for systemic risk classification and percentile prediction using Graph Neural Networks and Class to Regression (C2R).
 
 ## Installation
 
